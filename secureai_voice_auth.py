@@ -411,80 +411,25 @@ class SecureAI_Assistant:
         if self.phrase_setup_mode:
             messagebox.showinfo("Setup Active", "Phrase setup is already in progress!")
             return
-            
-        # Create custom dialog for phrase input
-        phrase_dialog = tk.Toplevel(self.root)
-        phrase_dialog.title("Set Custom Voice Phrase")
-        phrase_dialog.geometry("500x400")
-        phrase_dialog.configure(bg='#1a1a1a')
-        phrase_dialog.transient(self.root)
-        phrase_dialog.grab_set()
         
-        # Center the dialog
-        phrase_dialog.geometry("+%d+%d" % (self.root.winfo_rootx() + 50, self.root.winfo_rooty() + 50))
+        # Simple input dialog approach
+        phrase = tk.simpledialog.askstring(
+            "Set Custom Voice Phrase",
+            "Enter your custom authentication phrase:\n\n" +
+            "Examples:\n" +
+            "• Hello SecureAI, this is my voice authenticating access\n" +
+            "• My name is [Your Name] and I authorize this login\n" +
+            "• Voice authentication for my personal assistant\n\n" +
+            "Guidelines:\n" +
+            "• 10-100 characters\n" +
+            "• Easy to remember and say\n" +
+            "• Natural speaking style\n\n" +
+            "Your phrase:",
+            parent=self.root
+        )
         
-        # Title
-        title_label = tk.Label(phrase_dialog,
-                              text="🎤 Set Your Voice Authentication Phrase",
-                              font=('Segoe UI', 16, 'bold'),
-                              fg='#0078d4',
-                              bg='#1a1a1a')
-        title_label.pack(pady=20)
-        
-        # Instructions
-        instructions = tk.Label(phrase_dialog,
-                               text="Choose a phrase that is:\n• Easy for you to remember and say\n• 5-15 words long\n• Contains your natural speaking style\n• Comfortable to repeat multiple times",
-                               font=('Segoe UI', 11),
-                               fg='#ffffff',
-                               bg='#1a1a1a',
-                               justify='left')
-        instructions.pack(pady=10)
-        
-        # Example phrases
-        examples_label = tk.Label(phrase_dialog,
-                                 text="💡 Example phrases:",
-                                 font=('Segoe UI', 10, 'bold'),
-                                 fg='#00ff41',
-                                 bg='#1a1a1a')
-        examples_label.pack(pady=(20, 5))
-        
-        examples = tk.Label(phrase_dialog,
-                           text="• \"Hello SecureAI, this is my voice authenticating access\"\n• \"My name is [Your Name] and I authorize this login\"\n• \"Voice authentication for my personal assistant\"\n• \"Access granted to my secure AI system\"",
-                           font=('Segoe UI', 9),
-                           fg='#8a8886',
-                           bg='#1a1a1a',
-                           justify='left')
-        examples.pack(pady=5)
-        
-        # Input frame
-        input_frame = tk.Frame(phrase_dialog, bg='#1a1a1a')
-        input_frame.pack(pady=20, padx=20, fill='x')
-        
-        tk.Label(input_frame,
-                text="Enter your custom phrase:",
-                font=('Segoe UI', 10, 'bold'),
-                fg='#ffffff',
-                bg='#1a1a1a').pack(anchor='w')
-        
-        phrase_entry = tk.Text(input_frame,
-                              height=3,
-                              font=('Segoe UI', 11),
-                              wrap=tk.WORD,
-                              bg='#2d2d2d',
-                              fg='#ffffff',
-                              insertbackground='#ffffff',
-                              selectbackground='#0078d4')
-        phrase_entry.pack(fill='x', pady=5)
-        
-        # Buttons
-        button_frame = tk.Frame(phrase_dialog, bg='#1a1a1a')
-        button_frame.pack(pady=20)
-        
-        def save_phrase():
-            phrase = phrase_entry.get(1.0, tk.END).strip()
-            if len(phrase) < 10:
-                messagebox.showwarning("Phrase Too Short", "Please enter a phrase with at least 10 characters.")
-                return
+        if phrase and len(phrase.strip()) >= 10:
+            phrase = phrase.strip()
             if len(phrase) > 200:
                 messagebox.showwarning("Phrase Too Long", "Please enter a shorter phrase (max 200 characters).")
                 return
@@ -503,20 +448,8 @@ class SecureAI_Assistant:
             self.add_response("🎯 Now click 'Train Voice' to record 5 samples")
             self.speak_async("Custom phrase set successfully. Now train your voice with 5 samples.")
             
-            phrase_dialog.destroy()
-        
-        def cancel_phrase():
-            phrase_dialog.destroy()
-        
-        def test_phrase():
-            phrase = phrase_entry.get(1.0, tk.END).strip()
-            if phrase:
-                self.speak_async(phrase)
-                self.add_response(f"🔊 Testing phrase: \"{phrase}\"")
-        
-        ttk.Button(button_frame, text="💾 Save Phrase", command=save_phrase).pack(side='left', padx=5)
-        ttk.Button(button_frame, text="🔊 Test Phrase", command=test_phrase).pack(side='left', padx=5)
-        ttk.Button(button_frame, text="❌ Cancel", command=cancel_phrase).pack(side='left', padx=5)
+        elif phrase is not None and len(phrase.strip()) < 10:
+            messagebox.showwarning("Phrase Too Short", "Please enter a phrase with at least 10 characters.")
     
     def create_control_section(self, parent):
         """Create system control section"""
