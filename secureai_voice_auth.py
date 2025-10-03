@@ -1,6 +1,7 @@
 """
 SecureAI Voice Assistant - Enhanced Voice Authentication System
 Complete voice enrollment, authentication, and password fallback
+Thread-safe TTS implementation
 """
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, simpledialog
@@ -15,6 +16,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import pickle
+import queue
 
 # Core imports
 import pyttsx3
@@ -71,7 +73,6 @@ class VoiceAuthenticator:
     def extract_voice_features(self, audio_data, sr_rate=22050):
         """Extract voice features from audio"""
         if not LIBROSA_AVAILABLE:
-            # Simple fallback - use basic audio properties
             return {
                 'energy': float(np.mean(audio_data ** 2)),
                 'zero_crossing_rate': float(np.mean(np.abs(np.diff(np.sign(audio_data))))),
@@ -79,7 +80,6 @@ class VoiceAuthenticator:
             }
         
         try:
-            # Advanced features using librosa
             mfccs = librosa.feature.mfcc(y=audio_data, sr=sr_rate, n_mfcc=13)
             spectral_centroid = librosa.feature.spectral_centroid(y=audio_data, sr=sr_rate)
             zero_crossing_rate = librosa.feature.zero_crossing_rate(audio_data)
@@ -102,14 +102,12 @@ class VoiceAuthenticator:
             return 0.0
         
         if not LIBROSA_AVAILABLE:
-            # Simple comparison
             energy_diff = abs(features1['energy'] - features2['energy'])
             zcr_diff = abs(features1['zero_crossing_rate'] - features2['zero_crossing_rate'])
             similarity = max(0, 1 - (energy_diff + zcr_diff) / 2)
             return similarity
         
         try:
-            # Advanced comparison
             mfcc_similarity = np.corrcoef(features1['mfcc_mean'], features2['mfcc_mean'])[0, 1]
             if np.isnan(mfcc_similarity):
                 mfcc_similarity = 0
@@ -122,18 +120,95 @@ class VoiceAuthenticator:
         except:
             return 0.0
 
+class TTSManager:
+    """Thread-safe TTS manager using queue-based approach"""
+    def __init__(self):
+        self.speech_queue = queue.Queue()
+        self.is_running = True
+        self.lock = threading.Lock()
+        self.tts_thread = threading.Thread(target=self._speech_worker, daemon=True)
+        self.tts_thread.start()
+        print("TTS Manager initialized")
+        
+    def _speech_worker(self):
+        """Worker thread that processes speech queue"""
+        engine = None
+        try:
+            print("Initializing TTS engine in worker thread...")
+            if sys.platform == 'win32':
+                engine = pyttsx3.init('sapi5')
+            else:
+                engine = pyttsx3.init()
+            
+            if engine:
+                engine.setProperty('rate', 150)
+                engine.setProperty('volume', 1.0)
+                voices = engine.getProperty('voices')
+                if voices:
+                    for voice in voices:
+                        if 'english' in str(voice.languages).lower():
+                            engine.setProperty('voice', voice.id)
+                            break
+                print("TTS engine initialized successfully in worker thread")
+            else:
+                print("Failed to initialize TTS engine")
+                return
+        except Exception as e:
+            print(f"TTS engine initialization error: {e}")
+            return
+        
+        while self.is_running:
+            try:
+                text = self.speech_queue.get(timeout=0.5)
+                if text and engine:
+                    try:
+                        print(f"Speaking: {text}")
+                        engine.say(text)
+                        engine.runAndWait()
+                        print("Speech completed")
+                    except Exception as e:
+                        print(f"Speech error: {e}")
+                        try:
+                            engine.stop()
+                            if sys.platform == 'win32':
+                                engine = pyttsx3.init('sapi5')
+                            else:
+                                engine = pyttsx3.init()
+                            print("TTS engine reinitialized after error")
+                        except:
+                            print("Failed to reinitialize TTS engine")
+            except queue.Empty:
+                continue
+            except Exception as e:
+                print(f"Speech worker error: {e}")
+    
+    def speak(self, text):
+        """Add text to speech queue"""
+        if text:
+            self.speech_queue.put(text)
+    
+    def stop(self):
+        """Stop the TTS worker"""
+        self.is_running = False
+
 class SecureAI_Assistant:
     def __init__(self, root):
         self.root = root
-        self.root.title("SecureAI Voice Assistant - Enhanced Voice Authentication")
+        self.root.title("SecureX-Assist Voice Assistant - Enhanced Voice Authentication")
         self.root.geometry("1200x900")
         self.root.configure(bg='#1a1a1a')
         
         # Initialize voice authenticator
         self.voice_auth = VoiceAuthenticator()
         
-        # Initialize core components
-        self.init_tts()
+        # Initialize thread-safe TTS manager
+        print("Initializing TTS Manager...")
+        self.tts_manager = TTSManager()
+        
+        # Create thread pool
+        self.executor = ThreadPoolExecutor(max_workers=4)
+        
+        # Initialize speech recognition
         self.init_recognition()
         self.init_system_controls()
         
@@ -148,14 +223,11 @@ class SecureAI_Assistant:
         # Voice enrollment state
         self.enrollment_mode = False
         self.enrollment_samples = []
-        self.required_samples = 5  # Increased for better accuracy
+        self.required_samples = 5
         self.phrase_setup_mode = False
         
         # Password settings
         self.password_file = "secure_password.hash"
-        
-        # Thread pool for performance
-        self.executor = ThreadPoolExecutor(max_workers=4)
         
         # Create GUI
         self.setup_gui()
@@ -166,18 +238,6 @@ class SecureAI_Assistant:
         # Application dictionary
         self.setup_app_dictionary()
         
-    def init_tts(self):
-        """Initialize text-to-speech engine"""
-        try:
-            self.engine = pyttsx3.init("sapi5")
-            voices = self.engine.getProperty("voices")
-            if voices and len(voices) > 1:
-                self.engine.setProperty("voice", voices[1].id)
-            self.engine.setProperty("rate", 200)
-        except:
-            self.engine = None
-            print("TTS engine not available")
-    
     def init_recognition(self):
         """Initialize speech recognition"""
         self.recognizer = sr.Recognizer()
@@ -202,18 +262,18 @@ class SecureAI_Assistant:
     def setup_app_dictionary(self):
         """Setup application and website dictionaries"""
         self.apps = {
-            "notepad": {"cmd": "notepad", "exe": "notepad.exe"},
-            "calculator": {"cmd": "calc", "exe": "calc.exe"},
-            "paint": {"cmd": "paint", "exe": "mspaint.exe"},
-            "cmd": {"cmd": "cmd", "exe": "cmd.exe"},
-            "powershell": {"cmd": "powershell", "exe": "powershell.exe"},
-            "word": {"cmd": "winword", "exe": "WINWORD.EXE"},
-            "excel": {"cmd": "excel", "exe": "EXCEL.EXE"},
-            "chrome": {"cmd": "chrome", "exe": "chrome.exe"},
-            "firefox": {"cmd": "firefox", "exe": "firefox.exe"},
-            "edge": {"cmd": "msedge", "exe": "msedge.exe"},
-            "vs code": {"cmd": "code", "exe": "Code.exe"},
-            "explorer": {"cmd": "explorer", "exe": "explorer.exe"},
+            "notepad": {"cmd": "notepad", "exe": ["notepad.exe"]},
+            "calculator": {"cmd": "calc", "exe": ["calc.exe", "CalculatorApp.exe"]},
+            "paint": {"cmd": "paint", "exe": ["mspaint.exe"]},
+            "cmd": {"cmd": "cmd", "exe": ["cmd.exe"]},
+            "powershell": {"cmd": "powershell", "exe": ["powershell.exe"]},
+            "word": {"cmd": "winword", "exe": ["WINWORD.EXE"]},
+            "excel": {"cmd": "excel", "exe": ["EXCEL.EXE"]},
+            "chrome": {"cmd": "chrome", "exe": ["chrome.exe"]},
+            "firefox": {"cmd": "firefox", "exe": ["firefox.exe"]},
+            "edge": {"cmd": "msedge", "exe": ["msedge.exe"]},
+            "vs code": {"cmd": "code", "exe": ["Code.exe"]},
+            "explorer": {"cmd": "explorer", "exe": ["explorer.exe"]},
         }
         
         self.websites = {
@@ -227,47 +287,36 @@ class SecureAI_Assistant:
     
     def setup_gui(self):
         """Create the enhanced GUI with voice authentication"""
-        # Main container
         main_container = tk.Frame(self.root, bg='#1a1a1a')
         main_container.pack(fill='both', expand=True, padx=20, pady=20)
         
-        # Title section
         self.create_title_section(main_container)
-        
-        # Status section
         self.create_status_section(main_container)
         
-        # Main content with four columns
         content_frame = tk.Frame(main_container, bg='#1a1a1a')
         content_frame.pack(fill='both', expand=True, pady=20)
         
-        # Left column - Voice Authentication
         left_column = tk.Frame(content_frame, bg='#1a1a1a')
         left_column.pack(side='left', fill='y', padx=(0, 10))
         
-        # Left-middle column - System Controls
         left_mid_column = tk.Frame(content_frame, bg='#1a1a1a')
         left_mid_column.pack(side='left', fill='y', padx=10)
         
-        # Right-middle column - Quick Actions
         right_mid_column = tk.Frame(content_frame, bg='#1a1a1a')
         right_mid_column.pack(side='left', fill='y', padx=10)
         
-        # Right column - Response Log
         right_column = tk.Frame(content_frame, bg='#1a1a1a')
         right_column.pack(side='right', fill='both', expand=True, padx=(10, 0))
         
-        # Create sections
         self.create_voice_auth_section(left_column)
         self.create_control_section(left_mid_column)
         self.create_quick_actions_section(right_mid_column)
         self.create_response_section(right_column)
         
-        # Welcome messages
-        self.add_response("🚀 SecureAI Voice Assistant - Custom Phrase Authentication")
-        self.add_response("✏️ Set your own authentication phrase - speak it 5 times for training")
-        self.add_response("🎤 Advanced voice biometric analysis with environmental adaptation")
-        self.add_response("🔐 Multi-layer security: Custom Voice Phrase → Password Fallback → Access")
+        self.add_response("SecureAI Voice Assistant - Custom Phrase Authentication")
+        self.add_response("Set your own authentication phrase - speak it 5 times for training")
+        self.add_response("Advanced voice biometric analysis with environmental adaptation")
+        self.add_response("Multi-layer security: Custom Voice Phrase, Password Fallback, Access")
     
     def create_title_section(self, parent):
         """Create title section"""
@@ -275,7 +324,7 @@ class SecureAI_Assistant:
         title_frame.pack(fill='x', pady=(0, 20))
         
         title_label = tk.Label(title_frame,
-                              text="🛡️ SecureAI Voice Assistant",
+                              text="SecureAI Voice Assistant",
                               font=('Segoe UI', 32, 'bold'),
                               fg='#0078d4',
                               bg='#1a1a1a')
@@ -296,7 +345,6 @@ class SecureAI_Assistant:
         status_inner = tk.Frame(status_frame, bg='#252423')
         status_inner.pack(fill='x', padx=20, pady=15)
         
-        # Status indicator
         status_left = tk.Frame(status_inner, bg='#252423')
         status_left.pack(side='left')
         
@@ -311,9 +359,8 @@ class SecureAI_Assistant:
                                     bg='#252423')
         self.status_label.pack(side='left')
         
-        # Authentication status
         self.auth_status_label = tk.Label(status_inner,
-                                         text="🔒 Authentication Required",
+                                         text="Authentication Required",
                                          font=('Segoe UI', 11),
                                          fg='#ff6b6b',
                                          bg='#252423')
@@ -321,9 +368,8 @@ class SecureAI_Assistant:
     
     def create_voice_auth_section(self, parent):
         """Create voice authentication section"""
-        # Voice Authentication Frame
         voice_auth_frame = tk.LabelFrame(parent,
-                                        text="🎤 Voice Authentication",
+                                        text="Voice Authentication",
                                         font=('Segoe UI', 12, 'bold'),
                                         fg='#ffffff',
                                         bg='#1a1a1a',
@@ -334,16 +380,14 @@ class SecureAI_Assistant:
         voice_inner = tk.Frame(voice_auth_frame, bg='#1a1a1a')
         voice_inner.pack(fill='x', padx=15, pady=15)
         
-        # Voice setup section
-        tk.Label(voice_inner, text="📝 Voice Setup", font=('Segoe UI', 10, 'bold'), fg='#ffffff', bg='#1a1a1a').pack(anchor='w', pady=(0, 5))
+        tk.Label(voice_inner, text="Voice Setup", font=('Segoe UI', 10, 'bold'), fg='#ffffff', bg='#1a1a1a').pack(anchor='w', pady=(0, 5))
         
         self.phrase_btn = ttk.Button(voice_inner,
-                                    text="✏️ Set Custom Phrase",
+                                    text="Set Custom Phrase",
                                     command=self.set_custom_phrase,
                                     width=25)
         self.phrase_btn.pack(pady=2, fill='x')
         
-        # Current phrase display
         self.current_phrase_label = tk.Label(voice_inner,
                                            text="No custom phrase set",
                                            font=('Segoe UI', 9),
@@ -352,110 +396,58 @@ class SecureAI_Assistant:
                                            wraplength=200)
         self.current_phrase_label.pack(pady=(2, 8), fill='x')
         
-        # Voice enrollment section
-        tk.Label(voice_inner, text="📋 Voice Training", font=('Segoe UI', 10, 'bold'), fg='#ffffff', bg='#1a1a1a').pack(anchor='w', pady=(0, 5))
+        tk.Label(voice_inner, text="Voice Training", font=('Segoe UI', 10, 'bold'), fg='#ffffff', bg='#1a1a1a').pack(anchor='w', pady=(0, 5))
         
         self.enroll_btn = ttk.Button(voice_inner,
-                                    text="🎙️ Train Voice (5 samples)",
+                                    text="Train Voice (5 samples)",
                                     command=self.start_voice_enrollment,
                                     width=25,
                                     state='disabled')
         self.enroll_btn.pack(pady=2, fill='x')
         
         self.reset_voice_btn = ttk.Button(voice_inner,
-                                         text="🗑️ Reset Voice Data",
+                                         text="Reset Voice Data",
                                          command=self.reset_voice_data,
                                          width=25)
         self.reset_voice_btn.pack(pady=2, fill='x')
         
-        # Separator
         separator1 = ttk.Separator(voice_inner, orient='horizontal')
         separator1.pack(fill='x', pady=10)
         
-        # Voice authentication section
-        tk.Label(voice_inner, text="🔐 Voice Login", font=('Segoe UI', 10, 'bold'), fg='#ffffff', bg='#1a1a1a').pack(anchor='w', pady=(0, 5))
+        tk.Label(voice_inner, text="Voice Login", font=('Segoe UI', 10, 'bold'), fg='#ffffff', bg='#1a1a1a').pack(anchor='w', pady=(0, 5))
         
         self.voice_auth_btn = ttk.Button(voice_inner,
-                                        text="🎤 Voice Authentication",
+                                        text="Voice Authentication",
                                         command=self.start_voice_authentication,
                                         width=25)
         self.voice_auth_btn.pack(pady=2, fill='x')
         
-        # Separator
         separator2 = ttk.Separator(voice_inner, orient='horizontal')
         separator2.pack(fill='x', pady=10)
         
-        # Password fallback section
-        tk.Label(voice_inner, text="🔑 Password Fallback", font=('Segoe UI', 10, 'bold'), fg='#ffffff', bg='#1a1a1a').pack(anchor='w', pady=(0, 5))
+        tk.Label(voice_inner, text="Password Fallback", font=('Segoe UI', 10, 'bold'), fg='#ffffff', bg='#1a1a1a').pack(anchor='w', pady=(0, 5))
         
         self.password_auth_btn = ttk.Button(voice_inner,
-                                           text="🔐 Password Login",
+                                           text="Password Login",
                                            command=self.password_authentication,
                                            width=25)
         self.password_auth_btn.pack(pady=2, fill='x')
         
         self.set_password_btn = ttk.Button(voice_inner,
-                                          text="⚙️ Set Password",
+                                          text="Set Password",
                                           command=self.set_password,
                                           width=25)
         self.set_password_btn.pack(pady=2, fill='x')
         
-        # Authentication progress
         self.auth_progress = ttk.Progressbar(voice_inner, 
                                            mode='indeterminate',
                                            style='Horizontal.TProgressbar')
         self.auth_progress.pack(fill='x', pady=(10, 0))
     
-    def set_custom_phrase(self):
-        """Set custom phrase for voice authentication"""
-        if self.phrase_setup_mode:
-            messagebox.showinfo("Setup Active", "Phrase setup is already in progress!")
-            return
-        
-        # Simple input dialog approach
-        phrase = tk.simpledialog.askstring(
-            "Set Custom Voice Phrase",
-            "Enter your custom authentication phrase:\n\n" +
-            "Examples:\n" +
-            "• Hello SecureAI, this is my voice authenticating access\n" +
-            "• My name is [Your Name] and I authorize this login\n" +
-            "• Voice authentication for my personal assistant\n\n" +
-            "Guidelines:\n" +
-            "• 10-100 characters\n" +
-            "• Easy to remember and say\n" +
-            "• Natural speaking style\n\n" +
-            "Your phrase:",
-            parent=self.root
-        )
-        
-        if phrase and len(phrase.strip()) >= 10:
-            phrase = phrase.strip()
-            if len(phrase) > 200:
-                messagebox.showwarning("Phrase Too Long", "Please enter a shorter phrase (max 200 characters).")
-                return
-                
-            # Save the phrase
-            self.voice_auth.custom_phrase = phrase
-            
-            # Update current phrase display
-            self.current_phrase_label.config(
-                text=f"Phrase: \"{phrase}\"",
-                fg='#00ff41'
-            )
-            self.enroll_btn.config(state='normal')
-            
-            self.add_response(f"✅ Custom phrase set: \"{phrase}\"")
-            self.add_response("🎯 Now click 'Train Voice' to record 5 samples")
-            self.speak_async("Custom phrase set successfully. Now train your voice with 5 samples.")
-            
-        elif phrase is not None and len(phrase.strip()) < 10:
-            messagebox.showwarning("Phrase Too Short", "Please enter a phrase with at least 10 characters.")
-    
     def create_control_section(self, parent):
         """Create system control section"""
-        # System Controls Frame
         system_frame = tk.LabelFrame(parent,
-                                    text="💻 System Controls",
+                                    text="System Controls",
                                     font=('Segoe UI', 12, 'bold'),
                                     fg='#ffffff',
                                     bg='#1a1a1a',
@@ -467,27 +459,27 @@ class SecureAI_Assistant:
         system_inner.pack(fill='x', padx=15, pady=15)
         
         self.activate_btn = ttk.Button(system_inner,
-                                      text="🚀 Activate Assistant",
+                                      text="Activate Assistant",
                                       command=self.activate_assistant,
                                       state='disabled',
                                       width=25)
         self.activate_btn.pack(pady=2, fill='x')
         
         self.listen_btn = ttk.Button(system_inner,
-                                    text="👂 Start Listening",
+                                    text="Start Listening",
                                     command=self.toggle_listening,
                                     state='disabled',
                                     width=25)
         self.listen_btn.pack(pady=2, fill='x')
         
-        ttk.Button(system_inner, text="📸 Screenshot", command=self.take_screenshot, width=25).pack(pady=2, fill='x')
-        ttk.Button(system_inner, text="🔒 Lock Screen", command=self.lock_screen, width=25).pack(pady=2, fill='x')
-        ttk.Button(system_inner, text="📊 System Status", command=self.show_system_status, width=25).pack(pady=2, fill='x')
+        ttk.Button(system_inner, text="Screenshot", command=self.take_screenshot, width=25).pack(pady=2, fill='x')
+        ttk.Button(system_inner, text="Lock Screen", command=self.lock_screen, width=25).pack(pady=2, fill='x')
+        ttk.Button(system_inner, text="System Status", command=self.show_system_status, width=25).pack(pady=2, fill='x')
     
     def create_quick_actions_section(self, parent):
         """Create quick actions section"""
         quick_frame = tk.LabelFrame(parent,
-                                   text="⚡ Quick Actions",
+                                   text="Quick Actions",
                                    font=('Segoe UI', 12, 'bold'),
                                    fg='#ffffff',
                                    bg='#1a1a1a',
@@ -498,33 +490,29 @@ class SecureAI_Assistant:
         quick_inner = tk.Frame(quick_frame, bg='#1a1a1a')
         quick_inner.pack(fill='both', expand=True, padx=15, pady=15)
         
-        # Information section
-        tk.Label(quick_inner, text="📅 Information", font=('Segoe UI', 10, 'bold'), fg='#ffffff', bg='#1a1a1a').pack(anchor='w', pady=(0, 5))
-        ttk.Button(quick_inner, text="🕐 Current Time", command=self.get_time, width=20).pack(pady=2, fill='x')
-        ttk.Button(quick_inner, text="🌤️ Weather Info", command=self.get_weather, width=20).pack(pady=2, fill='x')
+        tk.Label(quick_inner, text="Information", font=('Segoe UI', 10, 'bold'), fg='#ffffff', bg='#1a1a1a').pack(anchor='w', pady=(0, 5))
+        ttk.Button(quick_inner, text="Current Time", command=self.get_time, width=20).pack(pady=2, fill='x')
+        ttk.Button(quick_inner, text="Weather Info", command=self.get_weather, width=20).pack(pady=2, fill='x')
         
-        # Search section
-        tk.Label(quick_inner, text="🔍 Quick Search", font=('Segoe UI', 10, 'bold'), fg='#ffffff', bg='#1a1a1a').pack(anchor='w', pady=(15, 5))
-        ttk.Button(quick_inner, text="🔍 Google", command=lambda: self.open_website("google"), width=20).pack(pady=2, fill='x')
-        ttk.Button(quick_inner, text="📺 YouTube", command=lambda: self.open_website("youtube"), width=20).pack(pady=2, fill='x')
+        tk.Label(quick_inner, text="Quick Search", font=('Segoe UI', 10, 'bold'), fg='#ffffff', bg='#1a1a1a').pack(anchor='w', pady=(15, 5))
+        ttk.Button(quick_inner, text="Google", command=lambda: self.open_website("google"), width=20).pack(pady=2, fill='x')
+        ttk.Button(quick_inner, text="YouTube", command=lambda: self.open_website("youtube"), width=20).pack(pady=2, fill='x')
         
-        # Apps section
-        tk.Label(quick_inner, text="🚀 Quick Launch", font=('Segoe UI', 10, 'bold'), fg='#ffffff', bg='#1a1a1a').pack(anchor='w', pady=(15, 5))
-        ttk.Button(quick_inner, text="🌐 Chrome", command=lambda: self.open_app("chrome"), width=20).pack(pady=2, fill='x')
-        ttk.Button(quick_inner, text="📝 Notepad", command=lambda: self.open_app("notepad"), width=20).pack(pady=2, fill='x')
-        ttk.Button(quick_inner, text="🧮 Calculator", command=lambda: self.open_app("calculator"), width=20).pack(pady=2, fill='x')
+        tk.Label(quick_inner, text="Quick Launch", font=('Segoe UI', 10, 'bold'), fg='#ffffff', bg='#1a1a1a').pack(anchor='w', pady=(15, 5))
+        ttk.Button(quick_inner, text="Chrome", command=lambda: self.open_app("chrome"), width=20).pack(pady=2, fill='x')
+        ttk.Button(quick_inner, text="Notepad", command=lambda: self.open_app("notepad"), width=20).pack(pady=2, fill='x')
+        ttk.Button(quick_inner, text="Calculator", command=lambda: self.open_app("calculator"), width=20).pack(pady=2, fill='x')
         
-        # Media section
-        tk.Label(quick_inner, text="🎵 Media Control", font=('Segoe UI', 10, 'bold'), fg='#ffffff', bg='#1a1a1a').pack(anchor='w', pady=(15, 5))
-        ttk.Button(quick_inner, text="▶️ Play/Pause", command=self.media_toggle, width=20).pack(pady=2, fill='x')
-        ttk.Button(quick_inner, text="🔊 Volume Up", command=self.volume_up, width=20).pack(pady=2, fill='x')
-        ttk.Button(quick_inner, text="🔉 Volume Down", command=self.volume_down, width=20).pack(pady=2, fill='x')
-        ttk.Button(quick_inner, text="🔇 Mute Toggle", command=self.volume_mute, width=20).pack(pady=2, fill='x')
+        tk.Label(quick_inner, text="Media Control", font=('Segoe UI', 10, 'bold'), fg='#ffffff', bg='#1a1a1a').pack(anchor='w', pady=(15, 5))
+        ttk.Button(quick_inner, text="Play/Pause", command=self.media_toggle, width=20).pack(pady=2, fill='x')
+        ttk.Button(quick_inner, text="Volume Up", command=self.volume_up, width=20).pack(pady=2, fill='x')
+        ttk.Button(quick_inner, text="Volume Down", command=self.volume_down, width=20).pack(pady=2, fill='x')
+        ttk.Button(quick_inner, text="Mute Toggle", command=self.volume_mute, width=20).pack(pady=2, fill='x')
     
     def create_response_section(self, parent):
         """Create response section"""
         response_frame = tk.LabelFrame(parent,
-                                      text="💬 Assistant Response & Activity Log",
+                                      text="Assistant Response & Activity Log",
                                       font=('Segoe UI', 12, 'bold'),
                                       fg='#ffffff',
                                       bg='#1a1a1a',
@@ -548,20 +536,37 @@ class SecureAI_Assistant:
                                                       bd=1)
         self.response_text.pack(fill='both', expand=True)
         
-        # Control buttons
         log_controls = tk.Frame(response_inner, bg='#1a1a1a')
         log_controls.pack(fill='x', pady=(10, 0))
         
-        ttk.Button(log_controls, text="🗑️ Clear Log", command=self.clear_log).pack(side='left', padx=(0, 10))
-        ttk.Button(log_controls, text="💾 Save Log", command=self.save_log).pack(side='left')
+        ttk.Button(log_controls, text="Clear Log", command=self.clear_log).pack(side='left', padx=(0, 10))
+        ttk.Button(log_controls, text="Save Log", command=self.save_log).pack(side='left')
     
-    # Authentication Methods
+    def speak_async(self, text):
+        """Speak text asynchronously using thread-safe TTS manager"""
+        self.tts_manager.speak(text)
+    
+    def add_response(self, message):
+        """Add message to response log"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        formatted_message = f"[{timestamp}] {message}\n"
+        
+        self.response_text.insert(tk.END, formatted_message)
+        self.response_text.see(tk.END)
+        self.root.update_idletasks()
+    
+    def update_status(self, status, color='#d13438'):
+        """Update status indicator"""
+        self.current_status = status
+        self.status_label.config(text=f"Status: {status}")
+        self.status_indicator.itemconfig(self.status_circle, fill=color)
+        self.root.update_idletasks()
+    
     def check_auth_setup(self):
         """Check existing authentication setup"""
         voice_profiles_exist = os.path.exists(self.voice_auth.voice_profiles_file) and self.voice_auth.voice_profiles
         password_exists = os.path.exists(self.password_file)
         
-        # Update custom phrase display
         if self.voice_auth.custom_phrase:
             self.current_phrase_label.config(
                 text=f"Phrase: \"{self.voice_auth.custom_phrase}\"",
@@ -570,29 +575,71 @@ class SecureAI_Assistant:
             self.enroll_btn.config(state='normal')
         else:
             self.current_phrase_label.config(
-                text="❌ No custom phrase set - Click 'Set Custom Phrase' first",
+                text="No custom phrase set - Click 'Set Custom Phrase' first",
                 fg='#ff6b6b'
             )
             self.enroll_btn.config(state='disabled')
         
         if voice_profiles_exist:
-            self.add_response(f"✅ Voice profiles found: {len(self.voice_auth.voice_profiles)} profile(s)")
+            self.add_response(f"Voice profiles found: {len(self.voice_auth.voice_profiles)} profile(s)")
             if self.voice_auth.custom_phrase:
                 self.voice_auth_btn.config(state='normal')
-                self.add_response(f"🎤 Voice phrase: \"{self.voice_auth.custom_phrase}\"")
+                self.add_response(f"Voice phrase: \"{self.voice_auth.custom_phrase}\"")
         else:
-            self.add_response("⚠️ No voice profiles found. Set custom phrase and train your voice.")
+            self.add_response("No voice profiles found. Set custom phrase and train your voice.")
             
         if password_exists:
-            self.add_response("✅ Password authentication available")
+            self.add_response("Password authentication available")
         else:
-            self.add_response("⚠️ No password set. Click 'Set Password' for fallback authentication.")
+            self.add_response("No password set. Click 'Set Password' for fallback authentication.")
             
         if not self.voice_auth.custom_phrase:
-            self.add_response("🎯 Step 1: Set your custom phrase")
-            self.add_response("🎯 Step 2: Train your voice with 5 samples")
+            self.add_response("Step 1: Set your custom phrase")
+            self.add_response("Step 2: Train your voice with 5 samples")
         elif not voice_profiles_exist:
-            self.add_response("🎯 Step 2: Train your voice with 5 samples")
+            self.add_response("Step 2: Train your voice with 5 samples")
+    
+    def set_custom_phrase(self):
+        """Set custom phrase for voice authentication"""
+        if self.phrase_setup_mode:
+            messagebox.showinfo("Setup Active", "Phrase setup is already in progress!")
+            return
+        
+        phrase = tk.simpledialog.askstring(
+            "Set Custom Voice Phrase",
+            "Enter your custom authentication phrase:\n\n" +
+            "Examples:\n" +
+            "• Hello SecureAI, this is my voice authenticating access\n" +
+            "• My name is [Your Name] and I authorize this login\n" +
+            "• Voice authentication for my personal assistant\n\n" +
+            "Guidelines:\n" +
+            "• 10-100 characters\n" +
+            "• Easy to remember and say\n" +
+            "• Natural speaking style\n\n" +
+            "Your phrase:",
+            parent=self.root
+        )
+        
+        if phrase and len(phrase.strip()) >= 10:
+            phrase = phrase.strip()
+            if len(phrase) > 200:
+                messagebox.showwarning("Phrase Too Long", "Please enter a shorter phrase (max 200 characters).")
+                return
+                
+            self.voice_auth.custom_phrase = phrase
+            
+            self.current_phrase_label.config(
+                text=f"Phrase: \"{phrase}\"",
+                fg='#00ff41'
+            )
+            self.enroll_btn.config(state='normal')
+            
+            self.add_response(f"Custom phrase set: \"{phrase}\"")
+            self.add_response("Now click 'Train Voice' to record 5 samples")
+            self.speak_async("Custom phrase set successfully. Now train your voice with 5 samples.")
+            
+        elif phrase is not None and len(phrase.strip()) < 10:
+            messagebox.showwarning("Phrase Too Short", "Please enter a phrase with at least 10 characters.")
     
     def start_voice_enrollment(self):
         """Start voice enrollment process"""
@@ -606,17 +653,16 @@ class SecureAI_Assistant:
             
         self.enrollment_mode = True
         self.enrollment_samples = []
-        self.enroll_btn.config(text="⏹️ Stop Training", command=self.stop_voice_enrollment)
+        self.enroll_btn.config(text="Stop Training", command=self.stop_voice_enrollment)
         self.auth_progress.start(10)
         
-        self.add_response("🎙️ Starting voice training process...")
-        self.add_response(f"📋 Recording {self.required_samples} samples of your custom phrase")
-        self.add_response(f"🗣️ You will repeat: \"{self.voice_auth.custom_phrase}\"")
-        self.add_response("� Speak naturally - different tones, speeds, and positions are good!")
+        self.add_response("Starting voice training process...")
+        self.add_response(f"Recording {self.required_samples} samples of your custom phrase")
+        self.add_response(f"You will repeat: \"{self.voice_auth.custom_phrase}\"")
+        self.add_response("Speak naturally - different tones, speeds, and positions are good!")
         
         self.speak_async(f"Starting voice training. You will repeat your phrase {self.required_samples} times. Speak naturally and clearly.")
         
-        # Start enrollment in thread
         threading.Thread(target=self.voice_enrollment_worker, daemon=True).start()
     
     def voice_enrollment_worker(self):
@@ -628,10 +674,9 @@ class SecureAI_Assistant:
                 if not self.enrollment_mode:
                     break
                     
-                self.add_response(f"🎤 Sample {i+1}/{self.required_samples}")
-                self.add_response(f"🗣️ Say: \"{custom_phrase}\"")
+                self.add_response(f"Sample {i+1}/{self.required_samples}")
+                self.add_response(f"Say: \"{custom_phrase}\"")
                 
-                # Give different instructions for variety
                 instructions = [
                     "Speak normally and clearly",
                     "Try speaking a bit slower",
@@ -641,14 +686,12 @@ class SecureAI_Assistant:
                 ]
                 
                 instruction = instructions[i] if i < len(instructions) else "Speak naturally"
-                self.add_response(f"💡 {instruction}")
+                self.add_response(f"{instruction}")
                 self.speak_async(f"Sample {i+1}. {instruction}. Please say your phrase.")
                 
-                # Wait a moment for user to prepare
                 time.sleep(2)
                 
-                # Record voice sample
-                sample = self.record_voice_sample(custom_phrase, 10)  # 10 second timeout for custom phrases
+                sample = self.record_voice_sample(custom_phrase, 10)
                 
                 if sample:
                     self.enrollment_samples.append({
@@ -657,105 +700,91 @@ class SecureAI_Assistant:
                         'timestamp': datetime.now().isoformat(),
                         'sample_number': i + 1
                     })
-                    self.add_response(f"✅ Sample {i+1} recorded successfully")
+                    self.add_response(f"Sample {i+1} recorded successfully")
                     
-                    # Provide feedback
                     if i < self.required_samples - 1:
-                        self.add_response(f"📊 {self.required_samples - (i+1)} more samples needed")
+                        self.add_response(f"{self.required_samples - (i+1)} more samples needed")
                 else:
-                    self.add_response(f"❌ Sample {i+1} failed - retrying...")
-                    i -= 1  # Retry this sample
+                    self.add_response(f"Sample {i+1} failed - retrying...")
+                    i -= 1
                     continue
                 
-                # Short pause between samples
                 if i < self.required_samples - 1:
                     time.sleep(1.5)
             
             if len(self.enrollment_samples) >= self.required_samples:
                 self.save_voice_enrollment()
             else:
-                self.add_response("❌ Training incomplete - not enough samples")
+                self.add_response("Training incomplete - not enough samples")
                 
         except Exception as e:
-            self.add_response(f"❌ Training error: {str(e)}")
+            self.add_response(f"Training error: {str(e)}")
         finally:
             self.stop_voice_enrollment()
     
     def record_voice_sample(self, expected_phrase, timeout=10):
         """Record a single voice sample"""
         try:
-            self.add_response("🎤 Recording... Speak now!")
+            self.add_response("Recording... Speak now!")
             
             with sr.Microphone() as source:
-                # Adjust for ambient noise
                 self.recognizer.adjust_for_ambient_noise(source, duration=0.8)
-                # Listen for the phrase
                 audio = self.recognizer.listen(source, timeout=timeout, phrase_time_limit=15)
             
-            self.add_response("🔄 Processing audio...")
+            self.add_response("Processing audio...")
             
-            # Convert to features
             audio_data = np.frombuffer(audio.frame_data, dtype=np.int16)
-            audio_data = audio_data.astype(np.float32) / 32768.0  # Normalize
+            audio_data = audio_data.astype(np.float32) / 32768.0
             
             features = self.voice_auth.extract_voice_features(audio_data)
             
-            # Try to recognize speech for verification (optional)
             try:
                 recognized_text = self.recognizer.recognize_google(audio, language="en-in")
-                self.add_response(f"🗣️ Heard: \"{recognized_text}\"")
+                self.add_response(f"Heard: \"{recognized_text}\"")
                 
-                # More flexible matching for custom phrases
                 expected_words = set(expected_phrase.lower().split())
                 recognized_words = set(recognized_text.lower().split())
                 
-                # Calculate word overlap percentage
                 if expected_words:
                     overlap = len(expected_words & recognized_words) / len(expected_words)
                     
-                    if overlap >= 0.5:  # At least 50% word match
-                        self.add_response(f"✅ Good match ({overlap:.1%} word overlap)")
+                    if overlap >= 0.5:
+                        self.add_response(f"Good match ({overlap:.1%} word overlap)")
                         return features
                     else:
-                        self.add_response(f"⚠️ Low match ({overlap:.1%}) - but voice features captured")
-                        # Still return features as voice patterns are more important than exact words
+                        self.add_response(f"Low match ({overlap:.1%}) - but voice features captured")
                         return features
                 else:
                     return features
                     
             except sr.UnknownValueError:
-                self.add_response("🎤 Speech unclear, but voice patterns captured")
-                # Voice features are still valid even if speech recognition fails
+                self.add_response("Speech unclear, but voice patterns captured")
                 return features
             except Exception as recognition_error:
-                self.add_response("🎤 Speech recognition failed, but voice patterns captured")
-                # Voice biometric features are still usable
+                self.add_response("Speech recognition failed, but voice patterns captured")
                 return features
                 
         except sr.WaitTimeoutError:
-            self.add_response("⏰ Recording timeout - please speak sooner")
+            self.add_response("Recording timeout - please speak sooner")
             return None
         except Exception as e:
-            self.add_response(f"❌ Recording error: {str(e)}")
+            self.add_response(f"Recording error: {str(e)}")
             return None
     
     def save_voice_enrollment(self):
         """Save voice enrollment data"""
         try:
-            user_id = "primary_user"  # In a multi-user system, this would be dynamic
+            user_id = "primary_user"
             
-            # Calculate average features
             all_features = [sample['features'] for sample in self.enrollment_samples]
             
             if not LIBROSA_AVAILABLE:
-                # Simple averaging for basic features
                 avg_features = {
                     'energy': np.mean([f['energy'] for f in all_features]),
                     'zero_crossing_rate': np.mean([f['zero_crossing_rate'] for f in all_features]),
                     'length': np.mean([f['length'] for f in all_features])
                 }
             else:
-                # Advanced averaging for MFCC features
                 avg_features = {
                     'mfcc_mean': np.mean([f['mfcc_mean'] for f in all_features], axis=0).tolist(),
                     'mfcc_std': np.mean([f['mfcc_std'] for f in all_features], axis=0).tolist(),
@@ -770,33 +799,33 @@ class SecureAI_Assistant:
                 'custom_phrase': self.voice_auth.custom_phrase,
                 'created': datetime.now().isoformat(),
                 'sample_count': len(self.enrollment_samples),
-                'version': '2.0'  # Version with custom phrases
+                'version': '2.0'
             }
             
             self.voice_auth.save_voice_profiles()
             
-            self.add_response("✅ Voice training completed successfully!")
-            self.add_response(f"🎯 {len(self.enrollment_samples)} voice samples analyzed and saved")
-            self.add_response(f"🔐 Your phrase: \"{self.voice_auth.custom_phrase}\"")
-            self.add_response("🚀 Voice authentication is now ready!")
+            self.add_response("Voice training completed successfully!")
+            self.add_response(f"{len(self.enrollment_samples)} voice samples analyzed and saved")
+            self.add_response(f"Your phrase: \"{self.voice_auth.custom_phrase}\"")
+            self.add_response("Voice authentication is now ready!")
             
             self.voice_auth_btn.config(state='normal')
-            self.enroll_btn.config(text="🔄 Re-train Voice", command=self.start_voice_enrollment)
+            self.enroll_btn.config(text="Re-train Voice", command=self.start_voice_enrollment)
             
             self.speak_async("Voice training completed successfully. Your voice authentication is now ready to use.")
             
         except Exception as e:
-            self.add_response(f"❌ Failed to save voice enrollment: {str(e)}")
+            self.add_response(f"Failed to save voice enrollment: {str(e)}")
     
     def stop_voice_enrollment(self):
         """Stop voice enrollment"""
         self.enrollment_mode = False
         if self.voice_auth.voice_profiles and "primary_user" in self.voice_auth.voice_profiles:
-            self.enroll_btn.config(text="🔄 Re-train Voice", command=self.start_voice_enrollment)
+            self.enroll_btn.config(text="Re-train Voice", command=self.start_voice_enrollment)
         else:
-            self.enroll_btn.config(text="🎙️ Train Voice (5 samples)", command=self.start_voice_enrollment)
+            self.enroll_btn.config(text="Train Voice (5 samples)", command=self.start_voice_enrollment)
         self.auth_progress.stop()
-        self.add_response("⏹️ Voice training stopped")
+        self.add_response("Voice training stopped")
     
     def start_voice_authentication(self):
         """Start voice authentication process"""
@@ -809,72 +838,67 @@ class SecureAI_Assistant:
             return
             
         self.auth_attempts += 1
-        self.add_response(f"🎤 Voice authentication attempt {self.auth_attempts}/{self.max_auth_attempts}")
+        self.add_response(f"Voice authentication attempt {self.auth_attempts}/{self.max_auth_attempts}")
         self.auth_progress.start(10)
         
-        # Use the custom phrase
         phrase = self.voice_auth.custom_phrase
-        self.add_response(f"🗣️ Please say your phrase:")
-        self.add_response(f"💬 \"{phrase}\"")
+        self.add_response(f"Please say your phrase:")
+        self.add_response(f"\"{phrase}\"")
         self.speak_async("Please say your custom authentication phrase.")
         
-        # Start authentication in thread
         threading.Thread(target=self.voice_authentication_worker, 
                         args=(phrase,), daemon=True).start()
     
     def voice_authentication_worker(self, expected_phrase):
         """Voice authentication worker"""
         try:
-            self.add_response("🎙️ Starting voice authentication...")
+            self.add_response("Starting voice authentication...")
             
-            # Record authentication sample
             sample_features = self.record_voice_sample(expected_phrase, timeout=12)
             
             if not sample_features:
-                self.add_response("❌ Voice recording failed")
+                self.add_response("Voice recording failed")
                 self.auth_progress.stop()
                 return
             
-            # Compare with enrolled profiles
             user_id = "primary_user"
             if user_id not in self.voice_auth.voice_profiles:
-                self.add_response("❌ No voice profile found")
+                self.add_response("No voice profile found")
                 self.auth_progress.stop()
                 return
             
             enrolled_features = self.voice_auth.voice_profiles[user_id]['features']
             similarity = self.voice_auth.compare_voice_features(sample_features, enrolled_features)
             
-            self.add_response(f"🔍 Analyzing voice patterns...")
-            self.add_response(f"📊 Voice similarity score: {similarity:.1%}")
+            self.add_response(f"Analyzing voice patterns...")
+            self.add_response(f"Voice similarity score: {similarity:.1%}")
             
-            # Dynamic threshold based on number of samples
             sample_count = self.voice_auth.voice_profiles[user_id].get('sample_count', 3)
             if sample_count >= 5:
-                threshold = 0.55  # Lower threshold for more samples (better training)
+                threshold = 0.55
             else:
-                threshold = 0.60  # Higher threshold for fewer samples
+                threshold = 0.60
             
-            self.add_response(f"🎯 Required threshold: {threshold:.1%}")
+            self.add_response(f"Required threshold: {threshold:.1%}")
             
             if similarity >= threshold:
-                self.add_response(f"✅ Voice match confirmed! ({similarity:.1%})")
+                self.add_response(f"Voice match confirmed! ({similarity:.1%})")
                 self.authentication_success("voice")
             else:
-                self.add_response(f"❌ Voice authentication failed")
-                self.add_response(f"⚠️ Similarity {similarity:.1%} below required {threshold:.1%}")
+                self.add_response(f"Voice authentication failed")
+                self.add_response(f"Similarity {similarity:.1%} below required {threshold:.1%}")
                 
                 if self.auth_attempts >= self.max_auth_attempts:
-                    self.add_response("🚫 Maximum voice authentication attempts reached")
-                    self.add_response("🔑 Please use password authentication for access")
+                    self.add_response("Maximum voice authentication attempts reached")
+                    self.add_response("Please use password authentication for access")
                     self.speak_async("Voice authentication failed multiple times. Please use password login.")
                 else:
                     remaining = self.max_auth_attempts - self.auth_attempts
-                    self.add_response(f"🔄 {remaining} attempts remaining. Try speaking more clearly.")
+                    self.add_response(f"{remaining} attempts remaining. Try speaking more clearly.")
                     self.speak_async("Authentication failed. Try speaking more clearly.")
                     
         except Exception as e:
-            self.add_response(f"❌ Voice authentication error: {str(e)}")
+            self.add_response(f"Voice authentication error: {str(e)}")
         finally:
             self.auth_progress.stop()
     
@@ -892,10 +916,10 @@ class SecureAI_Assistant:
             if self.verify_password(password):
                 self.authentication_success("password")
             else:
-                self.add_response("❌ Incorrect password")
+                self.add_response("Incorrect password")
                 messagebox.showerror("Authentication Failed", "Incorrect password!")
         else:
-            self.add_response("🚫 Password authentication cancelled")
+            self.add_response("Password authentication cancelled")
     
     def set_password(self):
         """Set password for fallback authentication"""
@@ -910,13 +934,13 @@ class SecureAI_Assistant:
             
             if password == confirm_password:
                 self.save_password(password)
-                self.add_response("✅ Password set successfully")
+                self.add_response("Password set successfully")
                 messagebox.showinfo("Success", "Password set successfully!")
             else:
-                self.add_response("❌ Passwords don't match")
+                self.add_response("Passwords don't match")
                 messagebox.showerror("Error", "Passwords don't match!")
         elif password:
-            self.add_response("❌ Password must be at least 6 characters")
+            self.add_response("Password must be at least 6 characters")
             messagebox.showerror("Error", "Password must be at least 6 characters!")
     
     def save_password(self, password):
@@ -926,7 +950,7 @@ class SecureAI_Assistant:
             with open(self.password_file, 'w') as f:
                 f.write(password_hash)
         except Exception as e:
-            self.add_response(f"❌ Failed to save password: {str(e)}")
+            self.add_response(f"Failed to save password: {str(e)}")
     
     def verify_password(self, password):
         """Verify password"""
@@ -944,14 +968,14 @@ class SecureAI_Assistant:
         self.is_authenticated = True
         self.auth_attempts = 0
         
-        self.add_response(f"✅ Authentication successful via {method}!")
+        success_message = f"Authentication successful via {method}!"
+        self.add_response(f"{success_message}")
         self.update_status("Authenticated", '#107c10')
-        self.auth_status_label.config(text="🔓 Authenticated", fg='#00ff41')
+        self.auth_status_label.config(text="Authenticated", fg='#00ff41')
         
-        # Enable controls
         self.activate_btn.config(state='normal')
         
-        self.speak_async(f"Authentication successful via {method}. Ready to activate.")
+        self.speak_async(f"{success_message} You can now activate the assistant.")
     
     def reset_voice_data(self):
         """Reset all voice data"""
@@ -966,62 +990,20 @@ class SecureAI_Assistant:
                 self.voice_auth.voice_profiles = {}
                 self.voice_auth.custom_phrase = None
                 self.voice_auth_btn.config(state='disabled')
-                self.enroll_btn.config(state='disabled', text="🎙️ Train Voice (5 samples)")
+                self.enroll_btn.config(state='disabled', text="Train Voice (5 samples)")
                 
-                # Reset phrase display
                 self.current_phrase_label.config(
-                    text="❌ No custom phrase set - Click 'Set Custom Phrase' first",
+                    text="No custom phrase set - Click 'Set Custom Phrase' first",
                     fg='#ff6b6b'
                 )
                 
-                self.add_response("🗑️ All voice data has been reset")
-                self.add_response("� Step 1: Set your custom phrase")
-                self.add_response("🎯 Step 2: Train your voice with 5 samples")
+                self.add_response("All voice data has been reset")
+                self.add_response("Step 1: Set your custom phrase")
+                self.add_response("Step 2: Train your voice with 5 samples")
                 messagebox.showinfo("Reset Complete", "All voice data has been reset! Please set up your custom phrase and retrain your voice.")
                 
             except Exception as e:
-                self.add_response(f"❌ Failed to reset voice data: {str(e)}")
-    
-    # Core Functions (similar to previous version)
-    def speak_async(self, text):
-        """Non-blocking speech"""
-        def speak_worker():
-            try:
-                if self.engine:
-                    self.engine.say(text)
-                    self.engine.runAndWait()
-            except:
-                pass
-        self.executor.submit(speak_worker)
-    
-    def add_response(self, message):
-        """Add message to response log"""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        formatted_message = f"[{timestamp}] {message}\\n"
-        
-        self.response_text.insert(tk.END, formatted_message)
-        
-        # Color coding
-        if "✅" in message:
-            start_idx = self.response_text.index(f"end-{len(formatted_message)}c")
-            end_idx = self.response_text.index("end-1c")
-            self.response_text.tag_add("success", start_idx, end_idx)
-            self.response_text.tag_config("success", foreground="#00ff41")
-        elif "❌" in message:
-            start_idx = self.response_text.index(f"end-{len(formatted_message)}c")
-            end_idx = self.response_text.index("end-1c")
-            self.response_text.tag_add("error", start_idx, end_idx)
-            self.response_text.tag_config("error", foreground="#ff4444")
-        
-        self.response_text.see(tk.END)
-        self.root.update_idletasks()
-    
-    def update_status(self, status, color='#d13438'):
-        """Update status indicator"""
-        self.current_status = status
-        self.status_label.config(text=f"Status: {status}")
-        self.status_indicator.itemconfig(self.status_circle, fill=color)
-        self.root.update_idletasks()
+                self.add_response(f"Failed to reset voice data: {str(e)}")
     
     def activate_assistant(self):
         """Activate assistant after authentication"""
@@ -1031,10 +1013,10 @@ class SecureAI_Assistant:
         
         self.is_activated = True
         self.update_status("Activated", '#0078d4')
-        self.add_response("🚀 SecureAI Assistant activated!")
+        self.add_response("SecureAI Assistant activated!")
         
         self.listen_btn.config(state='normal')
-        self.activate_btn.config(text="✅ Active", state='disabled')
+        self.activate_btn.config(text="Active", state='disabled')
         
         self.greet_user()
     
@@ -1048,10 +1030,9 @@ class SecureAI_Assistant:
         else:
             greeting = "Good evening! SecureAI is ready to assist you."
         
-        self.add_response(f"👋 {greeting}")
+        self.add_response(f"{greeting}")
         self.speak_async(greeting)
     
-    # Voice Command Processing
     def toggle_listening(self):
         """Toggle voice listening"""
         if not self.is_activated:
@@ -1065,30 +1046,34 @@ class SecureAI_Assistant:
     
     def start_listening(self):
         """Start voice recognition"""
+        if self.is_listening:
+            return
+            
         self.is_listening = True
-        self.listen_btn.config(text="🛑 Stop Listening")
+        self.listen_btn.config(text="Stop Listening")
         self.update_status("Listening...", '#0078d4')
-        self.add_response("👂 Voice recognition activated")
+        self.add_response("Voice recognition activated")
+        self.speak_async("Voice recognition activated. Ready for commands.")
         
         def listen_worker():
             while self.is_listening:
                 try:
                     with sr.Microphone() as source:
-                        self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                        self.recognizer.adjust_for_ambient_noise(source, duration=0.2)
                         audio = self.recognizer.listen(source, timeout=2, phrase_time_limit=5)
                     
                     self.update_status("Processing...", '#ffaa00')
                     query = self.recognizer.recognize_google(audio, language="en-in")
-                    self.add_response(f"🗣️ You said: '{query}'")
+                    self.add_response(f"You said: '{query}'")
                     
-                    self.process_voice_command(query.lower())
+                    threading.Thread(target=lambda: self.process_voice_command(query.lower()), daemon=True).start()
                     
                 except sr.WaitTimeoutError:
                     continue
                 except sr.UnknownValueError:
-                    self.add_response("❓ Could not understand")
+                    self.add_response("Could not understand")
                 except Exception as e:
-                    self.add_response(f"❌ Recognition error: {str(e)}")
+                    self.add_response(f"Recognition error: {str(e)}")
                 
                 if self.is_listening:
                     self.update_status("Listening...", '#0078d4')
@@ -1099,56 +1084,105 @@ class SecureAI_Assistant:
     def stop_listening(self):
         """Stop voice recognition"""
         self.is_listening = False
-        self.listen_btn.config(text="👂 Start Listening")
+        self.listen_btn.config(text="Start Listening")
         self.update_status("Activated", '#107c10')
-        self.add_response("🛑 Voice recognition stopped")
+        self.add_response("Voice recognition stopped")
     
     def process_voice_command(self, query):
         """Process voice commands"""
         try:
-            if "hello" in query or "hi" in query:
-                response = "Hello! How can I help you?"
-                self.add_response(f"🤖 {response}")
-                self.speak_async(response)
-            elif "time" in query:
-                self.get_time()
-            elif "weather" in query:
-                self.get_weather()
-            elif "open" in query:
-                for app in self.apps.keys():
-                    if app in query:
-                        self.open_app(app)
-                        return
-                self.add_response("❓ Which app would you like to open?")
-            elif "volume up" in query:
-                self.volume_up()
-            elif "volume down" in query:
-                self.volume_down()
-            elif "mute" in query:
-                self.volume_mute()
-            elif "screenshot" in query:
+            self.speak_async("Processing your command")
+            
+            if any(word in query for word in ["start", "begin", "activate"]) and "listening" in query:
+                self.speak_async("Activating voice recognition")
+                self.start_listening()
+                return
+            elif any(word in query for word in ["screenshot", "capture", "take picture"]):
+                self.speak_async("Taking a screenshot")
                 self.take_screenshot()
-            elif "lock screen" in query:
+                return
+            elif any(word in query for word in ["lock", "secure"]) and "screen" in query:
+                self.speak_async("Locking your screen")
                 self.lock_screen()
-            elif "go to sleep" in query or "stop" in query:
+                return
+            elif "system status" in query or "status" in query:
+                self.speak_async("Checking system status")
+                self.show_system_status()
+                return
+            elif any(word in query for word in ["time", "clock", "hour"]):
+                self.get_time()
+                return
+            elif any(word in query for word in ["weather", "temperature", "forecast"]):
+                self.get_weather()
+                return
+            elif "google" in query or "search" in query:
+                self.open_website("google")
+                return
+            elif "youtube" in query or "video" in query:
+                self.open_website("youtube")
+                return
+            elif "chrome" in query or "browser" in query:
+                self.open_app("chrome")
+                return
+            elif "notepad" in query or "text editor" in query:
+                self.open_app("notepad")
+                return
+            elif "calculator" in query or "calc" in query:
+                self.open_app("calculator")
+                return
+            elif any(word in query for word in ["play", "pause", "resume", "toggle"]):
+                self.media_toggle()
+                return
+            elif "volume up" in query or "increase volume" in query or "louder" in query:
+                self.volume_up()
+                return
+            elif "volume down" in query or "decrease volume" in query or "lower" in query:
+                self.volume_down()
+                return
+            elif "mute" in query or "silence" in query:
+                self.volume_mute()
+                return
+            elif "hello" in query or "hi" in query:
+                response = "Hello! How can I help you?"
+                self.add_response(f"{response}")
+                self.speak_async(response)
+                return
+            elif "go to sleep" in query or "stop" in query or "stop listening" in query:
                 self.stop_listening()
                 self.speak_async("Going to sleep mode")
+                return
+            elif "help" in query or "commands" in query or "what can you do" in query:
+                self.show_available_commands()
+                return
             else:
-                self.add_response("🤖 I'm not sure how to help with that")
+                response = "I'm not sure how to help with that. Say 'help' to see available commands."
+                self.add_response(f"{response}")
+                self.speak_async(response)
+                
         except Exception as e:
-            self.add_response(f"❌ Command error: {str(e)}")
+            error_msg = f"Error processing command: {str(e)}"
+            self.add_response(f"{error_msg}")
+            self.speak_async("Sorry, I encountered an error processing your command")
     
-    # Quick Action Functions (same as previous version)
     def get_time(self):
         current_time = datetime.now().strftime("%I:%M %p")
-        response = f"Current time is {current_time}"
-        self.add_response(f"🕐 {response}")
+        hour = datetime.now().hour
+        
+        if 5 <= hour < 12:
+            period = "morning"
+        elif 12 <= hour < 17:
+            period = "afternoon"
+        else:
+            period = "evening"
+            
+        response = f"Good {period}, the current time is {current_time}"
+        self.add_response(f"{response}")
         self.speak_async(response)
     
     def get_weather(self):
         def weather_worker():
             try:
-                self.add_response("🌤️ Fetching weather...")
+                self.add_response("Fetching weather...")
                 url = "https://www.google.com/search?q=weather"
                 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
                 response = requests.get(url, headers=headers, timeout=5)
@@ -1159,37 +1193,72 @@ class SecureAI_Assistant:
                 
                 if temp and desc:
                     weather_info = f"Weather: {desc.text}, Temperature: {temp.text}"
-                    self.add_response(f"🌤️ {weather_info}")
+                    self.add_response(f"{weather_info}")
                     self.speak_async(weather_info)
                 else:
-                    self.add_response("⚠️ Weather not available")
+                    self.add_response("Weather not available")
             except:
-                self.add_response("❌ Weather fetch failed")
+                self.add_response("Weather fetch failed")
         
         self.executor.submit(weather_worker)
     
     def open_website(self, site):
         if site in self.websites:
+            self.speak_async(f"Opening {site} in your browser")
             webbrowser.open(self.websites[site])
-            self.add_response(f"🌐 {site.title()} opened")
-            self.speak_async(f"{site} opened")
+            self.add_response(f"Opening {site.title()}")
+            time.sleep(1)
+            confirm_msg = f"{site.title()} is ready for you"
+            self.add_response(f"{confirm_msg}")
+            self.speak_async(confirm_msg)
     
     def open_app(self, app_name):
         def app_worker():
             try:
                 if app_name in self.apps:
+                    msg = f"Sure, I'll open {app_name} for you"
+                    self.add_response(f"{msg}")
+                    self.speak_async(msg)
+                    
                     subprocess.Popen(self.apps[app_name]["cmd"], shell=True)
-                    self.add_response(f"🚀 {app_name.title()} launched")
-                    self.speak_async(f"{app_name} opened")
+                    time.sleep(2)
+                    
+                    if self.check_app_running(app_name):
+                        success_msg = f"Great! {app_name} is now ready to use"
+                        self.add_response(f"{success_msg}")
+                        self.speak_async(success_msg)
+                    else:
+                        error_msg = f"I had trouble opening {app_name}. Please try again"
+                        self.add_response(f"{error_msg}")
+                        self.speak_async(error_msg)
             except Exception as e:
-                self.add_response(f"❌ Error opening {app_name}")
+                error_msg = f"Sorry, I couldn't open {app_name}. Please try again"
+                self.add_response(f"{error_msg}")
+                self.speak_async(error_msg)
         
         self.executor.submit(app_worker)
+        
+    def check_app_running(self, app_name):
+        """Check if an app is running"""
+        try:
+            if app_name in self.apps:
+                exe_names = self.apps[app_name]["exe"]
+                if not isinstance(exe_names, list):
+                    exe_names = [exe_names]
+                
+                exe_names_lower = [name.lower() for name in exe_names]
+                for proc in psutil.process_iter(['name']):
+                    if proc.info['name'].lower() in exe_names_lower:
+                        return True
+            return False
+        except:
+            return True
     
-    # Media Controls
     def volume_up(self):
         def volume_worker():
             try:
+                self.speak_async("Increasing the volume")
+                
                 if self.windows_api_available:
                     hwnd = self.user32.GetForegroundWindow()
                     for _ in range(3):
@@ -1201,10 +1270,13 @@ class SecureAI_Assistant:
                         self.keyboard.release(Key.media_volume_up)
                         time.sleep(0.05)
                 
-                self.add_response("🔊 Volume increased")
-                self.speak_async("Volume up")
+                self.add_response("Volume increased")
+                time.sleep(0.5)
+                self.speak_async("I've increased the volume for you")
             except:
-                self.add_response("❌ Volume control error")
+                error_msg = "Sorry, I couldn't adjust the volume"
+                self.add_response(f"{error_msg}")
+                self.speak_async(error_msg)
         
         self.executor.submit(volume_worker)
     
@@ -1222,10 +1294,12 @@ class SecureAI_Assistant:
                         self.keyboard.release(Key.media_volume_down)
                         time.sleep(0.05)
                 
-                self.add_response("🔉 Volume decreased")
-                self.speak_async("Volume down")
+                self.add_response("Volume decreased")
+                self.speak_async("Volume decreased")
             except:
-                self.add_response("❌ Volume control error")
+                error_msg = "Unable to control volume"
+                self.add_response(f"{error_msg}")
+                self.speak_async(error_msg)
         
         self.executor.submit(volume_worker)
     
@@ -1239,10 +1313,10 @@ class SecureAI_Assistant:
                     self.keyboard.press(Key.media_volume_mute)
                     self.keyboard.release(Key.media_volume_mute)
                 
-                self.add_response("🔇 Volume mute toggled")
+                self.add_response("Volume mute toggled")
                 self.speak_async("Mute toggled")
             except:
-                self.add_response("❌ Mute control error")
+                self.add_response("Mute control error")
         
         self.executor.submit(mute_worker)
     
@@ -1251,14 +1325,13 @@ class SecureAI_Assistant:
             try:
                 self.keyboard.press(Key.media_play_pause)
                 self.keyboard.release(Key.media_play_pause)
-                self.add_response("▶️ Media toggled")
+                self.add_response("Media toggled")
                 self.speak_async("Media toggled")
             except:
-                self.add_response("❌ Media control error")
+                self.add_response("Media control error")
         
         self.executor.submit(media_worker)
     
-    # System Functions
     def take_screenshot(self):
         def screenshot_worker():
             try:
@@ -1266,39 +1339,78 @@ class SecureAI_Assistant:
                 screenshot = pyautogui.screenshot()
                 filename = f"screenshot_{timestamp}.png"
                 screenshot.save(filename)
-                self.add_response(f"📸 Screenshot saved as {filename}")
+                self.add_response(f"Screenshot saved as {filename}")
                 self.speak_async("Screenshot taken")
             except:
-                self.add_response("❌ Screenshot failed")
+                self.add_response("Screenshot failed")
         
         self.executor.submit(screenshot_worker)
     
     def lock_screen(self):
         try:
             pyautogui.hotkey("win", "l")
-            self.add_response("🔒 Screen locked")
+            self.add_response("Screen locked")
             self.speak_async("Screen locked")
         except:
-            self.add_response("❌ Screen lock failed")
+            self.add_response("Screen lock failed")
     
     def show_system_status(self):
         def status_worker():
             try:
+                self.speak_async("Checking your system status")
+                
                 cpu_percent = psutil.cpu_percent(interval=1)
                 memory = psutil.virtual_memory()
+                disk = psutil.disk_usage('/')
+                battery = psutil.sensors_battery()
                 
-                status_info = f"💻 CPU: {cpu_percent}% | Memory: {memory.percent}%"
-                self.add_response(status_info)
-                self.speak_async(f"CPU {cpu_percent} percent, Memory {memory.percent} percent")
-            except:
-                self.add_response("❌ System status error")
+                status_lines = [
+                    f"CPU Usage: {cpu_percent}%",
+                    f"Memory Usage: {memory.percent}%",
+                    f"Disk Usage: {disk.percent}%"
+                ]
+                
+                if battery:
+                    status_lines.append(f"Battery: {battery.percent}% {'(Charging)' if battery.power_plugged else ''}")
+                
+                self.add_response("System Status Report:")
+                for line in status_lines:
+                    self.add_response(line)
+                
+                if cpu_percent > 80:
+                    cpu_status = "CPU usage is very high"
+                elif cpu_percent > 50:
+                    cpu_status = "CPU usage is moderate"
+                else:
+                    cpu_status = "CPU usage is normal"
+                    
+                if memory.percent > 80:
+                    mem_status = "Memory usage is very high"
+                elif memory.percent > 50:
+                    mem_status = "Memory usage is moderate"
+                else:
+                    mem_status = "Memory usage is normal"
+                
+                status_speech = f"Here's your system status: {cpu_status} at {cpu_percent} percent. {mem_status} at {memory.percent} percent."
+                
+                if battery:
+                    batt_status = "charging" if battery.power_plugged else "on battery power"
+                    status_speech += f" Your device is {batt_status} with {battery.percent} percent battery remaining."
+                
+                self.speak_async(status_speech)
+                
+            except Exception as e:
+                error_msg = "Unable to get system status"
+                self.add_response(f"{error_msg}")
+                self.speak_async(error_msg)
         
         self.executor.submit(status_worker)
     
-    # Utility Functions
     def clear_log(self):
         self.response_text.delete(1.0, tk.END)
-        self.add_response("🗑️ Log cleared")
+        message = "Activity log cleared"
+        self.add_response(f"{message}")
+        self.speak_async(message)
     
     def save_log(self):
         try:
@@ -1306,17 +1418,57 @@ class SecureAI_Assistant:
             filename = f"secureai_log_{timestamp}.txt"
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write(self.response_text.get(1.0, tk.END))
-            self.add_response(f"💾 Log saved as {filename}")
+            success_msg = f"Log saved as {filename}"
+            self.add_response(f"{success_msg}")
+            self.speak_async("Activity log saved successfully")
         except:
-            self.add_response("❌ Save failed")
+            error_msg = "Unable to save activity log"
+            self.add_response(f"{error_msg}")
+            self.speak_async(error_msg)
+            
+    def show_available_commands(self):
+        """Show available voice commands"""
+        commands = [
+            "System Controls:",
+            "- 'Start listening'",
+            "- 'Take screenshot'",
+            "- 'Lock screen'",
+            "- 'System status'",
+            "",
+            "Information:",
+            "- 'What's the time'",
+            "- 'Weather'",
+            "",
+            "Quick Search:",
+            "- 'Open Google'",
+            "- 'Open YouTube'",
+            "",
+            "Quick Launch:",
+            "- 'Open Chrome'",
+            "- 'Open Notepad'",
+            "- 'Open Calculator'",
+            "",
+            "Media Control:",
+            "- 'Play/Pause'",
+            "- 'Volume up/down'",
+            "- 'Mute'",
+            "",
+            "Other Commands:",
+            "- 'Help'",
+            "- 'Stop listening'",
+        ]
+        
+        for cmd in commands:
+            self.add_response(cmd)
+            
+        self.speak_async("Here are the available voice commands. You can say things like open chrome, take screenshot, or check weather.")
 
 def main():
     """Main function"""
-    print("🚀 Starting SecureAI Voice Assistant - Enhanced Authentication...")
+    print("Starting SecureAI Voice Assistant - Enhanced Authentication...")
     
     root = tk.Tk()
     
-    # Center window
     width, height = 1200, 900
     x = (root.winfo_screenwidth() // 2) - (width // 2)
     y = (root.winfo_screenheight() // 2) - (height // 2)
@@ -1328,21 +1480,24 @@ def main():
         if messagebox.askokcancel("Quit SecureAI", 
                                 "Are you sure you want to quit?"):
             try:
+                app.tts_manager.speak("Shutting down SecureAI Assistant. Goodbye!")
+                time.sleep(1.5)
+                app.tts_manager.stop()
                 app.executor.shutdown(wait=False)
-                if app.engine:
-                    app.engine.stop()
             except:
                 pass
             root.destroy()
     
     root.protocol("WM_DELETE_WINDOW", on_closing)
     
-    print("✅ SecureAI Enhanced Authentication Ready!")
+    print("SecureAI Enhanced Authentication Ready!")
+    app.speak_async("SecureAI Voice Assistant is ready. Please authenticate to begin.")
+    
     root.mainloop()
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        print(f"❌ Failed to start SecureAI: {e}")
+        print(f"Failed to start SecureAI: {e}")
         input("Press Enter to exit...")
