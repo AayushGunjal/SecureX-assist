@@ -1,0 +1,57 @@
+# SecureX-Assist Configuration
+
+app:
+  name: "SecureX-Assist"
+  version: "1.0.0"
+  theme: "sci-fi"
+
+system:
+  development_mode: true  # Enable for easier testing (disables some security features)
+  bypass_anti_spoofing: false  # Complete bypass of anti-spoofing (only use for testing/dev)
+
+security:
+  voice_threshold: 0.35  # Cosine distance threshold - Lower = stricter (0.25=75% match), Higher = more forgiving (0.35=65% match)
+  session_timeout: 3600  # seconds
+  max_login_attempts: 3
+  require_liveness: true
+  multi_factor: true
+  enrollment_samples: 3  # Number of voice samples during enrollment
+  min_match_samples: 2   # Minimum samples that must match (2 = majority required)
+  
+  # Anti-spoofing settings (SOTA - Advanced Detection)
+  enable_anti_spoofing: true  # ENABLED - Using ADVANCED AASIST-based detection
+  enable_liveness_check: true  # Enable voice liveness detection
+  enable_noise_normalization: true  # Normalize audio across environments
+  min_security_confidence: 0.5  # Minimum confidence for security checks (0-1) - LOWERED for fewer false positives
+  anti_spoof_mode: "advanced"  # "basic" or "advanced" (SOTA models)
+  quiet_environment_adaptation: true  # Adapt anti-spoofing for quiet environments
+
+audio:
+  sample_rate: 16000
+  channels: 1
+  chunk_size: 1024
+  recording_duration: 6  # seconds - Increased for better voice capture
+  min_speech_duration: 1.0  # seconds - Minimum continuous speech (LOWERED from 1.5 to accept shorter phrases)
+  min_audio_energy: 0.005  # Minimum energy level to detect speech (more sensitive for quieter mics)
+  vad_aggressiveness: 1  # WebRTC VAD aggressiveness (0=least, 3=most aggressive) - LOWERED for better speech retention
+
+models:
+  primary_embedding: "pyannote/embedding"
+  fallback_embedding: "speechbrain/spkrec-ecapa-voxceleb"
+  vad_model: "silero-vad"
+  stt_model: "vosk-model-small-en-us-0.15"
+
+database:
+  path: "securex_db.sqlite"
+  backup_enabled: true
+
+ui:
+  window_width: 1000
+  window_height: 700
+  theme_color: "#00ff41"  # Matrix green
+  animation_speed: 300  # milliseconds
+
+tts:
+  enabled: true
+  rate: 150
+  volume: 0.9
