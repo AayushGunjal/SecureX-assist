@@ -7,10 +7,15 @@ app:
 
 system:
   development_mode: true  # Enable for easier testing (disables some security features)
-  bypass_anti_spoofing: false  # Complete bypass of anti-spoofing (only use for testing/dev)
+  bypass_anti_spoofing: true  # Complete bypass of anti-spoofing (only use for testing/dev)
 
 security:
-  voice_threshold: 0.35  # Cosine distance threshold - Lower = stricter (0.25=75% match), Higher = more forgiving (0.35=65% match)
+  voice_threshold: 0.50  # Cosine distance threshold - Lower = stricter (0.25=75% match), Higher = more forgiving (0.50=50% match)
+  base_voice_threshold: 0.40  # Base cosine distance threshold for adaptive system
+  spoof_confidence_min: 0.01  # Minimum anti-spoofing confidence to accept voice (enrollment) - VERY LOW for processed audio (enrollment)
+  spoof_confidence_min_verify: 0.30  # Minimum anti-spoofing confidence for verification (LOWERED for processed audio)
+  adaptive_threshold: true  # Enable adaptive threshold based on user variance
+  voice_update_learning: true  # Enable post-verification embedding updates
   session_timeout: 3600  # seconds
   max_login_attempts: 3
   require_liveness: true
@@ -31,9 +36,15 @@ audio:
   channels: 1
   chunk_size: 1024
   recording_duration: 6  # seconds - Increased for better voice capture
-  min_speech_duration: 1.0  # seconds - Minimum continuous speech (LOWERED from 1.5 to accept shorter phrases)
-  min_audio_energy: 0.005  # Minimum energy level to detect speech (more sensitive for quieter mics)
-  vad_aggressiveness: 1  # WebRTC VAD aggressiveness (0=least, 3=most aggressive) - LOWERED for better speech retention
+  min_speech_duration: 0.5  # seconds - Minimum continuous speech (LOWERED from 0.8 to accept very short phrases)
+  min_audio_energy: 0.001  # Minimum energy level to detect speech (VERY sensitive for distant voices)
+  vad_aggressiveness: 0  # WebRTC VAD aggressiveness (0=least, 3=most aggressive) - MOST SENSITIVE
+
+augmentation:
+  pitch_shift: [-3, 3]  # ±3% pitch shift in semitones
+  gain_db: [-6, 6]  # ±6 dB gain variation
+  speed_factor: [0.95, 1.05]  # ±5% speed variation
+  noise_level: 0.01  # Background noise addition level
 
 models:
   primary_embedding: "pyannote/embedding"

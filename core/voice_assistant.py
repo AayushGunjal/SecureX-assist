@@ -20,10 +20,11 @@ class VoiceAssistant:
         self.active = False
         self.model_path = model_path
         self._vosk_model = None
-        self._tts_queue = queue.Queue()
-        self._tts_shutdown = threading.Event()
-        self._tts_thread = threading.Thread(target=self._tts_worker, daemon=True)
-        self._tts_thread.start()
+        # Disable TTS to avoid conflicts with main TTS system
+        # self._tts_queue = queue.Queue()
+        # self._tts_shutdown = threading.Event()
+        # self._tts_thread = threading.Thread(target=self._tts_worker, daemon=True)
+        # self._tts_thread.start()
         self.commands = {}
         self._load_model()
 
@@ -41,17 +42,21 @@ class VoiceAssistant:
 
     def activate(self):
         self.active = True
-        self.speak("Voice Assistant activated. Say a command.")
+        # Don't speak here - let UI handle TTS to avoid conflicts
+        # self.speak("Voice Assistant activated. Say a command.")
 
     def deactivate(self, silent=False):
         self.active = False
-        if not silent:
-            self.speak("Voice Assistant deactivated.")
+        # TTS disabled to avoid conflicts with main TTS system
+        # if not silent:
+        #     self.speak("Voice Assistant deactivated.")
 
     def speak(self, text):
-        if not text:
-            return
-        self._tts_queue.put(text)
+        # TTS disabled to avoid conflicts with main TTS system
+        # if not text:
+        #     return
+        # self._tts_queue.put(text)
+        pass
 
     def _tts_worker(self):
         engine = None
@@ -130,10 +135,12 @@ class VoiceAssistant:
                 engine.stop()
 
     def shutdown(self):
-        self._tts_shutdown.set()
-        self._tts_queue.put(None)
-        if self._tts_thread.is_alive():
-            self._tts_thread.join(timeout=1.0)
+        # TTS disabled, no cleanup needed
+        # self._tts_shutdown.set()
+        # self._tts_queue.put(None)
+        # if self._tts_thread.is_alive():
+        #     self._tts_thread.join(timeout=1.0)
+        pass
 
     def register_command(self, name, handler, keywords):
         """Register a command with handler and keywords."""
@@ -385,8 +392,8 @@ class VoiceAssistant:
             if transcript.strip():
                 success, response = self.process_voice_command(transcript)
 
-                # Speak response
-                self.speak(response)
+                # Don't speak response here - let UI handle TTS to avoid conflicts
+                # self.speak(response)
 
                 # Callback to UI
                 if callback:

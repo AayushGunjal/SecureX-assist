@@ -27,6 +27,10 @@ vosk>=0.3.21,<0.4.0
 transformers>=4.30.0,<4.31.0
 librosa>=0.10.0,<0.11.0
 
+# Deep Learning Face Recognition
+insightface>=0.7.3
+mediapipe>=0.10.0,<0.11.0
+
 # Ultimate Stack Components
 # speechbrain already specified above  # ECAPA-TDNN speaker embedding
 noisereduce>=3.0.0,<4.0.0   # Noise reduction

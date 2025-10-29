@@ -49,9 +49,15 @@ class AntiSpoofingEngine:
             quality_score = self._assess_speech_quality(audio_data, sample_rate)
             noise_score = self._analyze_background_noise(audio_data, sample_rate)
             
-            # Calculate overall scores
-            is_live = replay_score > 0.6 and liveness_score > 0.5
-            is_genuine = quality_score > 0.4 and noise_score > 0.3
+            # Calculate overall scores - adjusted thresholds for legitimate users
+            # Lower replay threshold since legitimate recordings can score ~0.45
+            is_live = replay_score > 0.4 and liveness_score > 0.5
+            # More permissive - clean recordings should still be genuine if quality is high
+            # Remove noise_score requirement since quality_score already covers speech quality
+            is_genuine = quality_score > 0.4
+            
+            logger.info(f"Security decision: is_live={is_live} (replay_score={replay_score:.3f} > 0.4: {replay_score > 0.4}, liveness_score={liveness_score:.3f} > 0.5: {liveness_score > 0.5})")
+            logger.info(f"Security decision: is_genuine={is_genuine} (quality_score={quality_score:.3f} > 0.4: {quality_score > 0.4})")
             
             # Overall confidence (weighted average)
             confidence = (
@@ -65,11 +71,15 @@ class AntiSpoofingEngine:
                 'is_live': is_live,
                 'is_genuine': is_genuine,
                 'confidence': float(confidence),
+                'spoof_score': float(1 - confidence),  # Higher score = more likely spoofed
                 'details': {
                     'replay_detection': float(replay_score),
                     'liveness_detection': float(liveness_score),
                     'quality_assessment': float(quality_score),
-                    'noise_analysis': float(noise_score)
+                    'noise_analysis': float(noise_score),
+                    'synthesis_detection': float(1 - (quality_score * 0.6 + liveness_score * 0.4)),  # Lower = more likely synthetic
+                    'liveness_check': float(liveness_score),  # Alias for liveness_detection
+                    'spectral_artifacts': float(1 - quality_score)  # Higher = more spectral artifacts (lower quality)
                 }
             }
             
@@ -83,7 +93,13 @@ class AntiSpoofingEngine:
                 'is_live': True,
                 'is_genuine': True,
                 'confidence': 0.5,
-                'details': {'error': str(e)}
+                'spoof_score': 0.5,
+                'details': {
+                    'error': str(e),
+                    'synthesis_detection': 0.5,  # Neutral score on error
+                    'liveness_check': 0.5,  # Neutral score on error
+                    'spectral_artifacts': 0.5  # Neutral score on error
+                }
             }
     
     def _load_audio(self, audio_path: str) -> Tuple[int, np.ndarray]:

@@ -62,7 +62,22 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL,
                     embedding_data TEXT NOT NULL,
+                    embedding_variance TEXT,
                     embedding_type TEXT DEFAULT 'pyannote',
+                    quality_score REAL DEFAULT 0.0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_active BOOLEAN DEFAULT 1,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            
+            # Face embeddings table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS face_embeddings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    embedding_data TEXT NOT NULL,
+                    embedding_type TEXT DEFAULT 'face_recognition',
                     quality_score REAL DEFAULT 0.0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     is_active BOOLEAN DEFAULT 1,
@@ -114,6 +129,14 @@ class Database:
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 )
             """)
+            
+            # Migration: Add embedding_variance column if it doesn't exist
+            try:
+                cursor.execute("ALTER TABLE voice_embeddings ADD COLUMN embedding_variance TEXT")
+                logger.info("Added embedding_variance column to voice_embeddings table")
+            except sqlite3.OperationalError:
+                # Column already exists
+                pass
             
             self.conn.commit()
             logger.info("Database schema initialized successfully")
@@ -195,6 +218,18 @@ class Database:
             logger.error(f"Failed to get user: {e}")
             return None
     
+    def get_all_users(self) -> List[Dict]:
+        """Get all active users"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM users WHERE is_active = 1 ORDER BY created_at DESC")
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+            
+        except Exception as e:
+            logger.error(f"Failed to get all users: {e}")
+            return []
+    
     def update_last_login(self, user_id: int):
         """Update user's last login timestamp"""
         try:
@@ -234,21 +269,55 @@ class Database:
         except Exception as e:
             logger.error(f"Failed to reset failed attempts: {e}")
     
+    def delete_user(self, user_id: int) -> bool:
+        """
+        Delete a user and all associated data
+        
+        Args:
+            user_id: User ID to delete
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            cursor = self.conn.cursor()
+            
+            # Get username for audit log before deletion
+            cursor.execute("SELECT username FROM users WHERE id = ?", (user_id,))
+            row = cursor.fetchone()
+            username = row['username'] if row else "unknown"
+            
+            # Delete user (CASCADE will handle related tables)
+            cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            
+            self.conn.commit()
+            
+            logger.info(f"User deleted: {username} (ID: {user_id})")
+            self.log_audit(None, "user_deleted", f"Username: {username}, ID: {user_id}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to delete user {user_id}: {e}")
+            return False
+    
     # ==================== VOICE EMBEDDING OPERATIONS ====================
     
     def store_voice_embedding(
         self, 
         user_id: int, 
         embedding: np.ndarray,
+        variance: Optional[np.ndarray] = None,
         embedding_type: str = "pyannote",
         quality_score: float = 1.0
     ) -> Optional[int]:
         """
-        Store voice embedding for a user
+        Store voice embedding for a user (mean embedding + variance)
         
         Args:
             user_id: User ID
-            embedding: Voice embedding (numpy array)
+            embedding: Voice embedding mean (numpy array)
+            variance: Voice embedding variance (numpy array, optional)
             embedding_type: Type of model used
             quality_score: Quality assessment score
             
@@ -258,13 +327,14 @@ class Database:
         try:
             # Serialize embedding to JSON
             embedding_json = json.dumps(embedding.tolist())
+            variance_json = json.dumps(variance.tolist()) if variance is not None else None
             
             cursor = self.conn.cursor()
             cursor.execute(
                 """INSERT INTO voice_embeddings 
-                (user_id, embedding_data, embedding_type, quality_score) 
-                VALUES (?, ?, ?, ?)""",
-                (user_id, embedding_json, embedding_type, quality_score)
+                (user_id, embedding_data, embedding_variance, embedding_type, quality_score) 
+                VALUES (?, ?, ?, ?, ?)""",
+                (user_id, embedding_json, variance_json, embedding_type, quality_score)
             )
             
             self.conn.commit()
@@ -304,6 +374,13 @@ class Database:
                 embedding_dict['embedding_array'] = np.array(
                     json.loads(embedding_dict['embedding_data'])
                 )
+                # Deserialize variance data if present
+                if embedding_dict['embedding_variance']:
+                    embedding_dict['embedding_variance'] = np.array(
+                        json.loads(embedding_dict['embedding_variance'])
+                    )
+                else:
+                    embedding_dict['embedding_variance'] = None
                 embeddings.append(embedding_dict)
             
             return embeddings
@@ -324,6 +401,169 @@ class Database:
             
         except Exception as e:
             logger.error(f"Failed to deactivate old embeddings: {e}")
+    
+    def update_voice_embedding(
+        self, 
+        user_id: int, 
+        new_embedding: np.ndarray,
+        learning_rate: float = 0.1
+    ) -> bool:
+        """
+        Update voice embedding using adaptive learning
+        
+        Args:
+            user_id: User ID
+            new_embedding: New voice embedding from successful verification
+            learning_rate: Learning rate for update (0.1 = 10% weight to new)
+            
+        Returns:
+            True if update successful
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """SELECT * FROM voice_embeddings 
+                WHERE user_id = ? AND is_active = 1 
+                ORDER BY created_at DESC LIMIT 1""",
+                (user_id,)
+            )
+            
+            row = cursor.fetchone()
+            if not row:
+                logger.warning(f"No active voice embedding found for user {user_id}")
+                return False
+            
+            # Get current embedding
+            current_embedding = np.array(json.loads(row['embedding_data']))
+            
+            # Adaptive update: 0.9 * old + 0.1 * new
+            updated_embedding = (1 - learning_rate) * current_embedding + learning_rate * new_embedding
+            updated_json = json.dumps(updated_embedding.tolist())
+            
+            # Update the database
+            cursor.execute(
+                """UPDATE voice_embeddings 
+                SET embedding_data = ?, quality_score = quality_score + 0.01 
+                WHERE id = ?""",
+                (updated_json, row['id'])
+            )
+            
+            self.conn.commit()
+            logger.info(f"Voice embedding updated for user {user_id} with adaptive learning")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to update voice embedding: {e}")
+            return False
+    
+    # ==================== FACE EMBEDDING OPERATIONS ====================
+    
+    def store_face_embedding(
+        self, 
+        user_id: int, 
+        embedding,
+        embedding_type: str = "face_recognition",
+        quality_score: float = 1.0
+    ) -> Optional[int]:
+        """
+        Store face embedding for a user
+        
+        Args:
+            user_id: User ID
+            embedding: Face embedding (list for arrays, string for hashes)
+            embedding_type: Type of model used
+            quality_score: Quality assessment score
+            
+        Returns:
+            Embedding ID if successful
+        """
+        try:
+            # Serialize embedding to JSON (works for both lists and strings)
+            embedding_json = json.dumps(embedding)
+            
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """INSERT INTO face_embeddings 
+                (user_id, embedding_data, embedding_type, quality_score) 
+                VALUES (?, ?, ?, ?)""",
+                (user_id, embedding_json, embedding_type, quality_score)
+            )
+            
+            self.conn.commit()
+            embedding_id = cursor.lastrowid
+            
+            logger.info(f"Face embedding stored for user ID {user_id}")
+            self.log_audit(user_id, "face_enrolled", f"Embedding ID: {embedding_id}")
+            
+            return embedding_id
+            
+        except Exception as e:
+            logger.error(f"Failed to store face embedding: {e}")
+            return None
+    
+    def get_face_embeddings(self, user_id: int) -> List[Dict]:
+        """
+        Get all active face embeddings for a user
+
+        Returns:
+            List of embedding dictionaries
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """SELECT * FROM face_embeddings
+                WHERE user_id = ? AND is_active = 1
+                ORDER BY created_at DESC""",
+                (user_id,)
+            )
+
+            rows = cursor.fetchall()
+            embeddings = []
+
+            for row in rows:
+                embedding_dict = dict(row)
+                # Parse the JSON embedding data
+                try:
+                    parsed_embedding = json.loads(embedding_dict['embedding_data'])
+                    # If it's a string (hash), use it directly
+                    if isinstance(parsed_embedding, str):
+                        embedding_dict['embedding_data'] = parsed_embedding
+                        embedding_dict['embedding_hash'] = parsed_embedding
+                    # If it's a list (array), keep as is
+                    elif isinstance(parsed_embedding, list):
+                        embedding_dict['embedding_data'] = parsed_embedding
+                        embedding_dict['embedding_hash'] = json.dumps(parsed_embedding)
+                    else:
+                        embedding_dict['embedding_data'] = str(parsed_embedding)
+                        embedding_dict['embedding_hash'] = str(parsed_embedding)
+                except (json.JSONDecodeError, TypeError):
+                    # If it's not JSON, treat as raw hash string
+                    embedding_dict['embedding_hash'] = embedding_dict['embedding_data']
+                
+                # Keep backward compatibility with array-based embeddings
+                if not isinstance(embedding_dict.get('embedding_array'), list):
+                    embedding_dict['embedding_array'] = [0.0] * 128
+                
+                embeddings.append(embedding_dict)
+
+            return embeddings
+
+        except Exception as e:
+            logger.error(f"Failed to get face embeddings: {e}")
+            return []
+    
+    def deactivate_old_face_embeddings(self, user_id: int):
+        """Deactivate old face embeddings when enrolling new ones"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "UPDATE face_embeddings SET is_active = 0 WHERE user_id = ?",
+                (user_id,)
+            )
+            self.conn.commit()
+            
+        except Exception as e:
+            logger.error(f"Failed to deactivate old face embeddings: {e}")
     
     # ==================== SESSION OPERATIONS ====================
     

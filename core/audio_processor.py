@@ -45,53 +45,51 @@ class AudioRecorder:
     
     def reduce_background_noise(self, audio_data: np.ndarray) -> np.ndarray:
         """
-        Apply real-time noise reduction to improve voice clarity
-        Uses spectral subtraction and adaptive filtering
+        Apply gentle noise reduction to improve voice clarity
+        Much less aggressive to preserve natural voice characteristics
         
         Args:
             audio_data: Input audio numpy array
             
         Returns:
-            Noise-reduced audio
+            Gently noise-reduced audio
         """
         try:
             # Make a copy to avoid modifying original
             audio = audio_data.copy().flatten()
             
-            # 1. High-pass filter to remove low-frequency noise (< 80 Hz)
+            # 1. Very gentle high-pass filter to remove only DC and very low rumble (< 50 Hz)
             nyquist = self.sample_rate / 2
-            low_cutoff = 80 / nyquist
-            b, a = signal.butter(4, low_cutoff, btype='high')
+            low_cutoff = 50 / nyquist  # LOWERED from 80Hz to preserve more low frequencies
+            b, a = signal.butter(2, low_cutoff, btype='high')  # LOWER order filter
             audio = signal.filtfilt(b, a, audio)
             
-            # 2. Noise gate - suppress very quiet parts (background noise)
-            noise_threshold = np.percentile(np.abs(audio), 20)  # Bottom 20% is noise
-            noise_gate_ratio = 0.3  # Reduce noise to 30%
+            # 2. Much gentler noise gate - only suppress absolute silence
+            noise_threshold = np.percentile(np.abs(audio), 5)  # Bottom 5% is noise (was 15%)
+            noise_gate_ratio = 0.8  # Reduce noise to 80% (was 50% - much gentler)
             mask = np.abs(audio) < noise_threshold
             audio[mask] *= noise_gate_ratio
             
-            # 3. Spectral subtraction for ambient noise
-            # Estimate noise from first 0.5 seconds (before speech typically starts)
-            noise_sample_length = int(0.5 * self.sample_rate)
-            if len(audio) > noise_sample_length:
-                noise_profile = audio[:noise_sample_length]
-                noise_power = np.mean(np.abs(noise_profile) ** 2)
-                
-                # Apply gentle spectral subtraction
-                audio_power = np.abs(audio) ** 2
-                clean_power = np.maximum(audio_power - noise_power * 0.5, 0)
-                audio = np.sign(audio) * np.sqrt(clean_power)
+            # 3. Skip spectral subtraction for enrollment - it's too destructive
+            # This preserves the natural spectral characteristics needed for quality analysis
             
-            # 4. Normalize to prevent clipping
+            # 4. Very gentle dynamic range compression
+            audio_rms = np.sqrt(np.mean(audio ** 2))
+            target_rms = 0.15  # HIGHER target RMS (was 0.1) to preserve dynamics
+            if audio_rms > 0:
+                compression_ratio = min(target_rms / audio_rms, 2.0)  # Max 2x compression (was 3.0)
+                audio = audio * compression_ratio
+            
+            # 5. Gentle normalization with more headroom
             max_val = np.max(np.abs(audio))
             if max_val > 0:
-                audio = audio / max_val * 0.95  # Leave headroom
+                audio = audio / max_val * 0.9  # More headroom (was 0.95)
             
             # Reshape back to original
             if len(audio_data.shape) > 1:
                 audio = audio.reshape(-1, 1)
             
-            logger.debug("Background noise reduction applied")
+            logger.debug("Enhanced background noise reduction applied")
             return audio
             
         except Exception as e:
@@ -158,6 +156,10 @@ class AudioRecorder:
             
             logger.info(f"Recording complete: shape={audio_data.shape}")
             
+            # Apply automatic gain control to boost quiet voices
+            logger.info("Applying automatic gain control...")
+            audio_data = AudioProcessor.apply_automatic_gain_control(audio_data, target_level=0.15)
+            
             # Apply noise reduction if enabled
             if reduce_noise:
                 logger.info("Applying background noise reduction...")
@@ -223,22 +225,29 @@ class VoiceActivityDetector:
     - Silero-VAD: Neural network-based, high accuracy
     """
     
-    def __init__(self, config: dict):
-        self.config = config
-        self.sample_rate = config.get('audio', {}).get('sample_rate', 16000)
+    def __init__(self, config: dict = None, aggressiveness: int = 1):
+        # Handle both old and new calling conventions
+        if config is not None:
+            self.config = config
+            self.sample_rate = config.get('audio', {}).get('sample_rate', 16000)
+            self.aggressiveness = config.get('audio', {}).get('vad_aggressiveness', aggressiveness)
+        else:
+            self.config = {}
+            self.sample_rate = 16000
+            self.aggressiveness = aggressiveness
         
-        # VAD thresholds
-        self.rms_threshold = 0.02
-        self.min_speech_duration = config.get('audio', {}).get('min_speech_duration', 2.0)
+        # VAD thresholds - use config values with more sensitive defaults
+        self.rms_threshold = self.config.get('audio', {}).get('min_audio_energy', 0.005)  # More sensitive
+        self.min_speech_duration = self.config.get('audio', {}).get('min_speech_duration', 1.0)
         
         # Silero VAD model (lazy load)
         self.silero_model = None
         
-        logger.info("VoiceActivityDetector initialized")
+        logger.info(f"VoiceActivityDetector initialized with RMS threshold: {self.rms_threshold}")
     
     def detect_voice_rms(self, audio_data: np.ndarray) -> Tuple[bool, float]:
         """
-        Simple RMS-based voice activity detection
+        Simple RMS-based voice activity detection - ENHANCED SENSITIVITY
         
         Args:
             audio_data: Audio numpy array
@@ -250,10 +259,24 @@ class VoiceActivityDetector:
             # Calculate RMS energy
             rms = np.sqrt(np.mean(audio_data ** 2))
             
-            # Check if above threshold
-            has_voice = rms > self.rms_threshold
+            # Use adaptive threshold based on audio characteristics
+            # For very quiet environments, be more sensitive
+            base_threshold = self.rms_threshold
             
-            logger.debug(f"RMS VAD: rms={rms:.4f}, threshold={self.rms_threshold}, voice={has_voice}")
+            # Check if audio has any significant content at all
+            percentile_95 = np.percentile(np.abs(audio_data), 95)
+            
+            # If the 95th percentile is very low, this might be silence
+            # But if RMS is above a very low threshold, consider it voice
+            adaptive_threshold = min(base_threshold, percentile_95 * 0.5)
+            
+            # Minimum threshold to prevent false positives from pure noise
+            adaptive_threshold = max(adaptive_threshold, 0.0005)  # Very sensitive minimum
+            
+            # Check if above threshold
+            has_voice = rms > adaptive_threshold
+            
+            logger.debug(f"RMS VAD: rms={rms:.6f}, adaptive_threshold={adaptive_threshold:.6f}, base_threshold={base_threshold:.6f}, voice={has_voice}")
             return has_voice, float(rms)
             
         except Exception as e:
@@ -279,7 +302,7 @@ class VoiceActivityDetector:
             
             self.get_speech_timestamps = utils[0]
             
-            logger.info("✓ Silero VAD model loaded")
+            logger.info("[OK] Silero VAD model loaded")
             return True
             
         except Exception as e:
@@ -417,23 +440,46 @@ class AudioProcessor:
             return audio_data
     
     @staticmethod
-    def reduce_noise(audio_data: np.ndarray, noise_reduce: float = 0.1) -> np.ndarray:
+    def apply_automatic_gain_control(audio_data: np.ndarray, target_level: float = 0.3) -> np.ndarray:
         """
-        Simple noise reduction using spectral gating
+        Apply Automatic Gain Control to boost quiet audio
+        
+        Args:
+            audio_data: Input audio array
+            target_level: Target RMS level (0.0-1.0)
+            
+        Returns:
+            Gain-adjusted audio
         """
         try:
-            # Estimate noise floor
-            sorted_audio = np.sort(np.abs(audio_data.flatten()))
-            noise_floor = np.mean(sorted_audio[:len(sorted_audio)//10])
+            # Calculate current RMS level
+            rms = np.sqrt(np.mean(audio_data ** 2))
             
-            # Apply soft threshold
-            threshold = noise_floor * (1 + noise_reduce)
-            mask = np.abs(audio_data) > threshold
-            
-            denoised = audio_data * mask
-            
-            return denoised
-            
+            # Calculate gain needed
+            if rms > 0:
+                gain = target_level / rms
+                
+                # Limit maximum gain to prevent distortion (max 10x gain)
+                gain = min(gain, 10.0)
+                
+                # Apply gain
+                adjusted_audio = audio_data * gain
+                
+                # Prevent clipping by soft limiting
+                max_val = np.max(np.abs(adjusted_audio))
+                if max_val > 0.95:
+                    # Soft compression for values above 0.95
+                    over_limit = adjusted_audio > 0.95
+                    adjusted_audio[over_limit] = 0.95 + (adjusted_audio[over_limit] - 0.95) * 0.1
+                    
+                    under_limit = adjusted_audio < -0.95
+                    adjusted_audio[under_limit] = -0.95 + (adjusted_audio[under_limit] + 0.95) * 0.1
+                
+                logger.debug(f"AGC applied: rms {rms:.4f} -> {np.sqrt(np.mean(adjusted_audio ** 2)):.4f}, gain {gain:.2f}x")
+                return adjusted_audio
+            else:
+                return audio_data
+                
         except Exception as e:
-            logger.error(f"Noise reduction failed: {e}")
+            logger.warning(f"AGC failed: {e}")
             return audio_data

@@ -10,7 +10,8 @@ from typing import Optional, Tuple, Dict
 import logging
 from pathlib import Path
 from core.anti_spoofing import AntiSpoofingEngine, VoiceNormalizer
-from core.advanced_anti_spoofing import AdvancedAntiSpoofingEngine, VoiceActivityDetector
+from core.anti_spoofing import AntiSpoofingEngine
+from core.audio_processor import VoiceActivityDetector
 
 # Suppress all warnings
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -48,15 +49,13 @@ class VoiceEngine:
         self.active_backend = None
         
         # Initialize anti-spoofing engines (dual-mode: basic + advanced)
-        self.anti_spoofing = AntiSpoofingEngine(config)  # Fallback
-        self.advanced_anti_spoofing = AdvancedAntiSpoofingEngine(config)  # SOTA
+        self.anti_spoofing = AntiSpoofingEngine(config)  # Primary
         self.voice_normalizer = VoiceNormalizer()
         
-        # Initialize VAD with config or default to 1 (less aggressive)
-        vad_aggr = config.get('audio', {}).get('vad_aggressiveness', 1)
-        self.vad = VoiceActivityDetector(aggressiveness=vad_aggr)
+        # Initialize VAD with config
+        self.vad = VoiceActivityDetector(config)
         
-        logger.info(f"Initializing VoiceEngine on {self.device} with ADVANCED anti-spoofing enabled")
+        logger.info(f"Initializing VoiceEngine on {self.device} with anti-spoofing enabled")
     
     def load_models(self) -> bool:
         """
@@ -121,10 +120,10 @@ class VoiceEngine:
                 logger.error("No valid speech detected in audio - recording appears to be silence or noise")
                 return None
             
-            # Step 3: Run ADVANCED anti-spoofing checks if enabled
+            # Step 3: Run anti-spoofing checks if enabled
             if enable_anti_spoofing:
-                # Use advanced SOTA anti-spoofing
-                security_result = self.advanced_anti_spoofing.analyze_audio_security(normalized_path)
+                # Use primary anti-spoofing
+                security_result = self.anti_spoofing.analyze_audio_security(normalized_path)
                 
                 if not security_result['is_live']:
                     logger.warning(f"REPLAY ATTACK DETECTED! Spoof score: {security_result['spoof_score']:.2%}")
@@ -136,7 +135,7 @@ class VoiceEngine:
                     logger.warning(f"Details: {security_result['details']}")
                     return None
                 
-                logger.info(f"Audio passed ADVANCED security checks (confidence: {security_result['confidence']:.2%})")
+                logger.info(f"Audio passed security checks (confidence: {security_result['confidence']:.2%})")
                 logger.info(f"   - Replay detection: {security_result['details']['replay_detection']:.2%}")
                 logger.info(f"   - Synthesis detection: {security_result['details']['synthesis_detection']:.2%}")
                 logger.info(f"   - Liveness check: {security_result['details']['liveness_check']:.2%}")
@@ -172,6 +171,40 @@ class VoiceEngine:
                 
         except Exception as e:
             logger.error(f"Embedding extraction failed: {e}")
+            return None
+    
+    def extract_embedding_from_array(self, audio_data: np.ndarray, sample_rate: int = 16000, 
+                                   enable_anti_spoofing: bool = True) -> Optional[np.ndarray]:
+        """
+        Extract voice embedding directly from numpy array
+        
+        Args:
+            audio_data: Audio data as numpy array
+            sample_rate: Sample rate of audio data
+            enable_anti_spoofing: Enable anti-spoofing checks
+            
+        Returns:
+            512-dimensional embedding or None
+        """
+        try:
+            # Save temporary WAV file
+            import tempfile
+            import soundfile as sf
+            
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                temp_path = temp_file.name
+                sf.write(temp_path, audio_data, sample_rate)
+            
+            try:
+                # Use existing extraction method
+                embedding = self.extract_embedding(temp_path, enable_anti_spoofing)
+                return embedding
+            finally:
+                # Clean up temp file
+                Path(temp_path).unlink(missing_ok=True)
+                
+        except Exception as e:
+            logger.error(f"Array embedding extraction failed: {e}")
             return None
     
     def _validate_speech_present(self, audio_path: str) -> bool:

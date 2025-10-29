@@ -1,319 +1,300 @@
 """
-Advanced Audio Preprocessing Module
-Ultimate Offline Voice Biometric Stack - Component 3
-
-Multi-stage audio processing pipeline:
-1. Silence removal (webrtcvad)
-2. Volume normalization
-3. Noise reduction (noisereduce)
-4. Feature extraction (librosa)
-5. Quality validation
-
-Features:
-- VAD-based silence removal
-- Adaptive noise reduction
-- Automatic gain control
-- Quality metrics
+SecureX-Assist - Advanced Audio Preprocessing
+Data augmentation for voice biometric training and anti-spoofing
 """
 
-import logging
 import numpy as np
-import torch
-import torchaudio
-import warnings
-from typing import Tuple, Dict, Optional
-
-warnings.filterwarnings('ignore', category=UserWarning)
+import scipy.signal as signal
+from typing import List, Tuple, Optional
+import logging
+from pathlib import Path
+import random
 
 logger = logging.getLogger(__name__)
 
 
-class AudioPreprocessor:
+class AudioAugmentationEngine:
     """
-    Advanced audio preprocessing for speaker verification.
-    Removes silence, cleans noise, normalizes volume.
+    Advanced audio data augmentation for voice biometric training
+    Generates diverse voice samples from limited enrollment data
     """
-    
-    def __init__(self, sample_rate: int = 16000):
+
+    def __init__(self, config: dict):
+        self.config = config
+        self.augmentation_settings = config.get('augmentation', {})
+
+        # Default augmentation parameters
+        self.pitch_shift_range = self.augmentation_settings.get('pitch_shift', [-3, 3])
+        self.gain_db_range = self.augmentation_settings.get('gain_db', [-6, 6])
+        self.speed_factor_range = self.augmentation_settings.get('speed_factor', [0.95, 1.05])
+        self.noise_level = self.augmentation_settings.get('noise_level', 0.01)
+
+        logger.info("AudioAugmentationEngine initialized with advanced augmentation")
+
+    def augment_audio_sample(self, audio_data: np.ndarray, sample_rate: int) -> List[np.ndarray]:
         """
-        Initialize audio preprocessor.
-        
+        Generate augmented versions of a single audio sample
+
         Args:
-            sample_rate: Target sample rate (16kHz for voice biometrics)
-        """
-        self.sample_rate = sample_rate
-        
-        # Initialize WebRTC VAD
-        try:
-            import webrtcvad
-            self.vad = webrtcvad.Vad(1)  # Aggressiveness 1 (least aggressive)
-            logger.info("✅ WebRTC VAD initialized (aggressiveness=1)")
-        except ImportError:
-            logger.warning("webrtcvad not available, will skip VAD")
-            self.vad = None
-        
-        # Initialize noise reduction
-        try:
-            import noisereduce
-            logger.info("✅ noisereduce library available")
-        except ImportError:
-            logger.warning("noisereduce not available, will use librosa alternative")
-    
-    def process(self, audio_array: np.ndarray, 
-                remove_silence: bool = True,
-                reduce_noise: bool = True,
-                normalize: bool = True) -> Tuple[np.ndarray, Dict]:
-        """
-        Full audio preprocessing pipeline.
-        
-        Args:
-            audio_array: Input audio (numpy array, float32, 16kHz)
-            remove_silence: Whether to remove silence
-            reduce_noise: Whether to apply noise reduction
-            normalize: Whether to normalize volume
-            
+            audio_data: Original audio numpy array (can be 1D or 2D)
+            sample_rate: Audio sample rate
+
         Returns:
-            Tuple of (processed_audio, stats_dict)
+            List of augmented audio samples
         """
-        stats = {
-            "original_length": len(audio_array),
-            "original_rms": float(np.sqrt(np.mean(audio_array**2))),
-        }
-        
-        processed = audio_array.copy()
-        
-        # Step 1: Remove silence
-        if remove_silence and self.vad:
-            processed = self._remove_silence_vad(processed)
-            stats["after_vad_length"] = len(processed)
-        
-        # Step 2: Reduce noise
-        if reduce_noise:
-            processed = self._reduce_noise(processed)
-            stats["after_noise_reduction_rms"] = float(np.sqrt(np.mean(processed**2)))
-        
-        # Step 3: Normalize volume
-        if normalize:
-            processed = self._normalize_volume(processed)
-            stats["after_normalization_rms"] = float(np.sqrt(np.mean(processed**2)))
-        
-        # Step 4: Validate quality
-        stats["quality_metrics"] = self._compute_quality_metrics(processed)
-        
-        logger.info(f"✅ Audio preprocessing complete:")
-        logger.info(f"   - Original: {stats['original_length']} samples")
-        logger.info(f"   - After VAD: {stats.get('after_vad_length', stats['original_length'])} samples")
-        logger.info(f"   - Final RMS: {stats.get('after_normalization_rms', stats['original_rms']):.4f}")
-        
-        return processed, stats
-    
-    def _remove_silence_vad(self, audio: np.ndarray) -> np.ndarray:
+        # Ensure audio is 1D
+        if audio_data.ndim == 2:
+            audio_data = audio_data.squeeze()
+        elif audio_data.ndim != 1:
+            logger.warning(f"Unexpected audio dimensions: {audio_data.shape}, skipping augmentation")
+            return [audio_data]
+
+        augmented_samples = [audio_data]  # Include original
+
+        # Generate 4 augmented versions
+        for i in range(4):
+            augmented = audio_data.copy()
+
+            # Apply random augmentations in sequence
+            augmented = self._apply_pitch_shift(augmented, sample_rate)
+            augmented = self._apply_gain_variation(augmented)
+            augmented = self._apply_speed_variation(augmented, sample_rate)
+            augmented = self._add_background_noise(augmented)
+
+            augmented_samples.append(augmented)
+
+        return augmented_samples
+
+    def _apply_pitch_shift(self, audio_data: np.ndarray, sample_rate: int) -> np.ndarray:
         """
-        Remove silence using WebRTC VAD.
-        
-        VAD divides audio into 10/20/30ms frames and classifies each as speech/silence.
+        Apply random pitch shifting (±3% by default)
         """
-        if self.vad is None:
-            return audio
-        
         try:
-            # Convert to int16 for WebRTC VAD
-            audio_int16 = (audio * 32767).astype(np.int16)
-            
-            # Frame parameters
-            frame_duration_ms = 20  # WebRTC VAD typically uses 20ms frames
-            frame_size = int(self.sample_rate * frame_duration_ms / 1000)
-            
-            # Process frames
-            voiced_frames = []
-            for start in range(0, len(audio_int16), frame_size):
-                end = min(start + frame_size, len(audio_int16))
-                frame = audio_int16[start:end].tobytes()
-                
-                # Check if frame contains voice
-                if len(frame) == frame_size * 2:  # 2 bytes per 16-bit sample
-                    is_voiced = self.vad.is_speech(frame, self.sample_rate)
-                    if is_voiced:
-                        voiced_frames.append(audio[start:end])
-            
-            if voiced_frames:
-                result = np.concatenate(voiced_frames)
-                logger.info(f"VAD: Removed {len(audio) - len(result)} silent samples")
-                return result
+            # Random pitch shift in semitones
+            pitch_shift = random.uniform(self.pitch_shift_range[0], self.pitch_shift_range[1])
+
+            if abs(pitch_shift) < 0.1:  # Skip if shift is negligible
+                return audio_data
+
+            # Convert semitones to frequency ratio
+            ratio = 2 ** (pitch_shift / 12.0)
+
+            # Resample to achieve pitch shift
+            new_length = int(len(audio_data) / ratio)
+            if new_length > 0:
+                shifted_audio = signal.resample(audio_data, new_length)
+                # Pad or truncate to original length
+                if len(shifted_audio) > len(audio_data):
+                    shifted_audio = shifted_audio[:len(audio_data)]
+                else:
+                    # Pad with zeros
+                    padding = np.zeros(len(audio_data) - len(shifted_audio))
+                    shifted_audio = np.concatenate([shifted_audio, padding])
+
+                return shifted_audio.astype(audio_data.dtype)
             else:
-                logger.warning("VAD: No voiced frames detected, returning original")
-                return audio
-                
+                return audio_data
+
         except Exception as e:
-            logger.warning(f"VAD processing failed: {e}, returning original")
-            return audio
-    
-    def _reduce_noise(self, audio: np.ndarray) -> np.ndarray:
+            logger.warning(f"Pitch shift failed: {e}")
+            return audio_data
+
+    def _apply_gain_variation(self, audio_data: np.ndarray) -> np.ndarray:
         """
-        Reduce background noise using spectral subtraction or noisereduce.
-        """
-        try:
-            import noisereduce as nr
-            
-            # Use noisereduce library (spectral subtraction)
-            reduced = nr.reduce_noise(y=audio, sr=self.sample_rate)
-            logger.info("✅ Noise reduction applied (noisereduce)")
-            return reduced
-            
-        except ImportError:
-            # Fallback: Simple spectral subtraction using librosa
-            return self._spectral_subtraction(audio)
-    
-    def _spectral_subtraction(self, audio: np.ndarray) -> np.ndarray:
-        """
-        Simple spectral subtraction for noise reduction.
-        
-        Assumes first 0.5 seconds are noise.
+        Apply random gain variation (±6 dB by default)
         """
         try:
-            import librosa
-            
-            # Estimate noise profile (first 0.5s)
-            noise_duration_samples = int(0.5 * self.sample_rate)
-            noise_profile = audio[:noise_duration_samples]
-            
-            # Compute spectrograms
-            S = librosa.stft(audio)
-            S_noise = librosa.stft(noise_profile)
-            
-            # Spectral subtraction
-            S_magnitude = np.abs(S)
-            noise_magnitude = np.abs(S_noise).mean(axis=1, keepdims=True)
-            
-            # Subtract noise
-            subtracted = S_magnitude - noise_magnitude
-            subtracted = np.maximum(subtracted, 0)  # Prevent negative values
-            
-            # Reconstruct
-            phase = np.angle(S)
-            S_reduced = subtracted * np.exp(1j * phase)
-            audio_reduced = librosa.istft(S_reduced)
-            
-            # Match original length
-            if len(audio_reduced) > len(audio):
-                audio_reduced = audio_reduced[:len(audio)]
+            # Random gain in dB
+            gain_db = random.uniform(self.gain_db_range[0], self.gain_db_range[1])
+            gain_factor = 10 ** (gain_db / 20.0)  # Convert dB to linear
+
+            # Apply gain
+            augmented = audio_data * gain_factor
+
+            # Prevent clipping
+            max_val = np.max(np.abs(augmented))
+            if max_val > 1.0:
+                augmented = augmented / max_val * 0.95
+
+            return augmented
+
+        except Exception as e:
+            logger.warning(f"Gain variation failed: {e}")
+            return audio_data
+
+    def _apply_speed_variation(self, audio_data: np.ndarray, sample_rate: int) -> np.ndarray:
+        """
+        Apply random speed variation (±5% by default)
+        """
+        try:
+            # Random speed factor
+            speed_factor = random.uniform(self.speed_factor_range[0], self.speed_factor_range[1])
+
+            if abs(speed_factor - 1.0) < 0.01:  # Skip if change is negligible
+                return audio_data
+
+            # Resample to achieve speed change
+            new_length = int(len(audio_data) / speed_factor)
+            if new_length > 0:
+                speed_changed = signal.resample(audio_data, new_length)
+
+                # Stretch/compress to original length using interpolation
+                original_indices = np.linspace(0, len(speed_changed) - 1, len(audio_data))
+                stretched = np.interp(original_indices, np.arange(len(speed_changed)), speed_changed)
+
+                return stretched.astype(audio_data.dtype)
             else:
-                audio_reduced = np.pad(audio_reduced, (0, len(audio) - len(audio_reduced)))
-            
-            logger.info("✅ Noise reduction applied (spectral subtraction)")
-            return audio_reduced.astype(np.float32)
-            
+                return audio_data
+
         except Exception as e:
-            logger.warning(f"Spectral subtraction failed: {e}, returning original")
-            return audio
-    
-    def _normalize_volume(self, audio: np.ndarray) -> np.ndarray:
+            logger.warning(f"Speed variation failed: {e}")
+            return audio_data
+
+    def _add_background_noise(self, audio_data: np.ndarray) -> np.ndarray:
         """
-        Normalize audio to target RMS level.
-        
-        Automatic Gain Control (AGC): Adjusts volume to standard level
-        to handle different microphone gains.
-        """
-        target_rms = 0.1  # Target RMS level
-        
-        current_rms = np.sqrt(np.mean(audio**2))
-        if current_rms < 1e-6:
-            logger.warning("Audio has near-zero RMS, skipping normalization")
-            return audio
-        
-        # Calculate gain
-        gain = target_rms / current_rms
-        normalized = audio * gain
-        
-        # Prevent clipping
-        if np.max(np.abs(normalized)) > 0.95:
-            normalized = normalized / np.max(np.abs(normalized)) * 0.95
-        
-        logger.info(f"✅ Volume normalized (gain: {gain:.2f}x)")
-        return normalized.astype(np.float32)
-    
-    def _compute_quality_metrics(self, audio: np.ndarray) -> Dict:
-        """
-        Compute quality metrics for audio validation.
+        Add subtle background noise to simulate real environments
         """
         try:
-            import librosa
+            # Generate white noise
+            noise = np.random.normal(0, self.noise_level, len(audio_data))
+
+            # Mix with original audio
+            noisy_audio = audio_data + noise
+
+            # Normalize to prevent clipping
+            max_val = np.max(np.abs(noisy_audio))
+            if max_val > 1.0:
+                noisy_audio = noisy_audio / max_val * 0.95
+
+            return noisy_audio
+
+        except Exception as e:
+            logger.warning(f"Background noise addition failed: {e}")
+            return audio_data
+
+    def generate_enrollment_samples(self, original_samples: List[np.ndarray], sample_rate: int) -> List[np.ndarray]:
+        """
+        Generate comprehensive enrollment dataset from original samples
+
+        Args:
+            original_samples: List of original audio samples (typically 3, can be 1D or 2D)
+            sample_rate: Audio sample rate
+
+        Returns:
+            Extended list including original + augmented samples
+        """
+        enrollment_dataset = []
+
+        for original in original_samples:
+            # Ensure audio is 1D for processing
+            if original.ndim == 2:
+                processed_original = original.squeeze()
+            else:
+                processed_original = original
             
-            # RMS energy
-            rms = np.sqrt(np.mean(audio**2))
-            
-            # MFCC statistics
-            mfcc = librosa.feature.mfcc(y=audio, sr=self.sample_rate, n_mfcc=13)
-            mfcc_mean = np.mean(mfcc)
-            mfcc_std = np.std(mfcc)
-            
-            # Zero crossing rate
-            zcr = librosa.feature.zero_crossing_rate(audio)
-            zcr_mean = np.mean(zcr)
-            
-            # Signal-to-Noise Ratio estimate
-            # Use spectral flatness as proxy for SNR
-            spec_centroid = librosa.feature.spectral_centroid(y=audio, sr=self.sample_rate)
-            snr_estimate = float(spec_centroid.mean())
-            
+            # Add original sample
+            enrollment_dataset.append(processed_original)
+
+            # Generate augmented versions
+            augmented_versions = self.augment_audio_sample(processed_original, sample_rate)
+            enrollment_dataset.extend(augmented_versions[1:])  # Skip original (already added)
+
+        logger.info(f"Generated {len(enrollment_dataset)} enrollment samples from {len(original_samples)} originals")
+        return enrollment_dataset
+
+
+class VoiceQualityAnalyzer:
+    """
+    Analyze voice quality and detect potential spoofing indicators
+    """
+
+    def __init__(self, config: dict):
+        self.config = config
+        self.sample_rate = config.get('audio', {}).get('sample_rate', 16000)
+
+    def analyze_voice_quality(self, audio_data: np.ndarray) -> dict:
+        """
+        Analyze various voice quality metrics
+
+        Returns:
+            Dictionary with quality scores and spoofing indicators
+        """
+        try:
+            # Ensure audio is 1D for analysis
+            if audio_data.ndim == 2:
+                audio_data = audio_data.squeeze()
+            elif audio_data.ndim != 1:
+                logger.warning(f"Unexpected audio dimensions: {audio_data.shape}")
+                return {'quality_score': 0.0, 'is_live_voice': False}
+
+            # Basic quality metrics
+            rms_energy = np.sqrt(np.mean(audio_data ** 2))
+            zero_crossings = np.sum(np.abs(np.diff(np.sign(audio_data)))) / (2 * len(audio_data))
+            spectral_centroid = self._calculate_spectral_centroid(audio_data)
+
+            # Spoofing indicators
+            quality_score = self._calculate_quality_score(audio_data, rms_energy, zero_crossings, spectral_centroid)
+
+            # Debug logging
+            logger.info(f"Voice quality metrics - RMS: {rms_energy:.4f}, ZCR: {zero_crossings:.4f}, Centroid: {spectral_centroid:.1f}, Score: {quality_score:.3f}, Live: {quality_score >= 0.25}")
+
             return {
-                "rms_energy": float(rms),
-                "mfcc_mean": float(mfcc_mean),
-                "mfcc_std": float(mfcc_std),
-                "zcr_mean": float(zcr_mean),
-                "snr_estimate": float(snr_estimate),
-                "duration_sec": len(audio) / self.sample_rate,
+                'rms_energy': float(rms_energy),
+                'zero_crossings': float(zero_crossings),
+                'spectral_centroid': float(spectral_centroid),
+                'quality_score': float(quality_score),
+                'is_live_voice': quality_score >= 0.25  # Match config threshold
             }
-            
+
         except Exception as e:
-            logger.warning(f"Quality metrics computation failed: {e}")
-            return {"error": str(e)}
-    
-    def validate_audio_quality(self, audio: np.ndarray, 
-                              min_duration: float = 1.0,
-                              min_rms: float = 0.01) -> Tuple[bool, str]:
-        """
-        Validate audio quality for speaker verification.
-        
-        Args:
-            audio: Audio array
-            min_duration: Minimum duration in seconds
-            min_rms: Minimum RMS energy level
-            
-        Returns:
-            Tuple of (is_valid, reason)
-        """
-        duration = len(audio) / self.sample_rate
-        rms = np.sqrt(np.mean(audio**2))
-        
-        if duration < min_duration:
-            return False, f"Duration too short: {duration:.1f}s < {min_duration}s"
-        
-        if rms < min_rms:
-            return False, f"Signal too quiet: RMS {rms:.4f} < {min_rms}"
-        
-        return True, "Audio quality OK"
-    
-    def get_processor_info(self) -> Dict:
-        """Get information about the preprocessor."""
-        return {
-            "sample_rate": self.sample_rate,
-            "vad_available": self.vad is not None,
-            "pipeline": [
-                "Silence removal (WebRTC VAD)",
-                "Noise reduction (noisereduce)",
-                "Volume normalization (AGC)",
-                "Quality validation"
-            ]
-        }
+            logger.error(f"Voice quality analysis failed: {e}")
+            return {'quality_score': 0.0, 'is_live_voice': False}
 
+    def _calculate_spectral_centroid(self, audio_data: np.ndarray) -> float:
+        """Calculate spectral centroid (brightness of sound)"""
+        try:
+            # Compute FFT
+            fft = np.fft.fft(audio_data)
+            freqs = np.fft.fftfreq(len(audio_data), 1/self.sample_rate)
 
-if __name__ == "__main__":
-    logger.info("Testing Audio Preprocessor...")
-    
-    preprocessor = AudioPreprocessor()
-    info = preprocessor.get_processor_info()
-    
-    print("\n✅ Preprocessor Info:")
-    for key, value in info.items():
-        print(f"   {key}: {value}")
+            # Magnitude spectrum
+            magnitude = np.abs(fft)
+
+            # Spectral centroid
+            centroid = np.sum(freqs * magnitude) / np.sum(magnitude)
+
+            return abs(centroid)  # Return absolute value
+
+        except Exception:
+            return 0.0
+
+    def _calculate_quality_score(self, audio_data: np.ndarray, rms: float, zcr: float, centroid: float) -> float:
+        """
+        Calculate overall voice quality score (0-1)
+        Higher scores indicate better live voice quality
+        """
+        try:
+            score = 0.0
+
+            # RMS energy score (should be reasonable, not too quiet/loud)
+            if 0.001 < rms < 0.8:  # MUCH more lenient for processed audio
+                score += 0.3
+            elif 0.0005 < rms < 1.0:  # Very lenient range
+                score += 0.2
+
+            # Zero crossing rate (should be typical for human speech)
+            if 0.01 < zcr < 0.5:  # Much more lenient
+                score += 0.3
+            elif 0.005 < zcr < 0.8:  # Very lenient range
+                score += 0.2
+
+            # Spectral centroid (should be in human voice range ~2-5 kHz)
+            if 300 < centroid < 10000:  # Much more lenient
+                score += 0.4
+            elif 100 < centroid < 15000:  # Very lenient range
+                score += 0.3
+
+            return min(score, 1.0)  # Cap at 1.0
+
+        except Exception:
+            return 0.0

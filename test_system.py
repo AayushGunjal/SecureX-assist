@@ -175,7 +175,7 @@ def test_audio_devices():
         
         if not input_devices:
             print("❌ No microphone devices found")
-            print("   Check Windows Settings → Privacy → Microphone")
+            print("   Check Windows Settings -> Privacy -> Microphone")
             return False
         
         print(f"\n✅ Found {len(input_devices)} microphone(s):")
