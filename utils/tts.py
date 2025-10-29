@@ -1,150 +1,151 @@
 """
 SecureX-Assist - Text-to-Speech System
-Audio feedback and confirmation
+Audio feedback and confirmation using Piper TTS
 """
 
-import pyttsx3
 import logging
 from typing import Optional
 import threading
+import sounddevice as sd
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
-
 class TextToSpeech:
     """
-    Text-to-speech engine for audio feedback
+    Text-to-speech engine using Piper for natural voice synthesis
     Provides voice confirmations and status updates
     """
-    
+
     def __init__(self, config: dict):
         self.config = config
         self.enabled = config.get('tts', {}).get('enabled', True)
-        
-        # TTS settings
-        self.rate = config.get('tts', {}).get('rate', 150)
-        self.volume = config.get('tts', {}).get('volume', 0.9)
-        
-        # Initialize engine
-        self.engine: Optional[pyttsx3.Engine] = None
-        self._lock = threading.Lock()
-        
+
+        # Piper TTS settings
+        self.model_path = config.get('tts', {}).get('model_path', 'en_US-lessac-medium.onnx')
+        self.voice = None
+
+        # Fallback TTS engine (pyttsx3)
+        self._fallback_engine = None
+        self._engine_lock = threading.Lock()
+
         # TTS queue for handling concurrent requests
         self._tts_queue = []
         self._tts_thread = None
         self._shutdown = False
-        
+        self._lock = threading.Lock()
+
         if self.enabled:
-            self._initialize_engine()
-    
-    def _initialize_engine(self):
-        """Initialize pyttsx3 engine"""
+            self._initialize_voice()
+
+    def _initialize_voice(self):
+        """Initialize Piper voice"""
         try:
-            self.engine = pyttsx3.init()
-            
-            # Set properties
-            self.engine.setProperty('rate', self.rate)
-            self.engine.setProperty('volume', self.volume)
-            
-            # Get available voices
-            voices = self.engine.getProperty('voices')
-            if voices:
-                # Prefer female voice for better clarity
-                for voice in voices:
-                    if 'female' in voice.name.lower() or 'zira' in voice.name.lower():
-                        self.engine.setProperty('voice', voice.id)
-                        break
-            
-            logger.info("Text-to-Speech engine initialized")
-            
+            # Try to load the model
+            from piper import PiperVoice
+            self.voice = PiperVoice.load(self.model_path)
+            logger.info(f"Piper TTS initialized with model: {self.model_path}")
+        except ImportError:
+            logger.warning("Piper TTS not available, using fallback")
+            self.voice = None
         except Exception as e:
-            logger.error(f"TTS initialization failed: {e}")
-            self.enabled = False
-    
+            logger.error(f"Failed to initialize Piper TTS: {e}")
+            logger.info("Falling back to system TTS...")
+            self.voice = None
+
     def speak(self, text: str, blocking: bool = False):
         """
-        Speak text using TTS
-        
+        Speak text using Piper TTS
+
         Args:
             text: Text to speak
             blocking: If True, wait for speech to complete
         """
-        if not self.enabled or not self.engine or not text or not text.strip():
-            logger.debug(f"TTS disabled or no text, would say: {text}")
+        if not self.enabled or not text:
             return
-        
-        try:
-            with self._lock:
+
+        if self.voice:
+            # Use Piper TTS
+            try:
+                # Generate audio data
+                audio_data = self.voice.synthesize(text)
+
+                # Convert to numpy array
+                audio_array = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+
                 if blocking:
-                    self.engine.say(text)
-                    self.engine.runAndWait()
+                    # Play synchronously
+                    sd.play(audio_array, samplerate=22050)
+                    sd.wait()
                 else:
-                    # Use a queue-based approach to avoid run loop conflicts
-                    if not hasattr(self, '_tts_queue'):
-                        self._tts_queue = []
-                        self._tts_thread = None
-                    
-                    self._tts_queue.append(text)
-                    self._process_queue_async()
-                    
-        except RuntimeError as e:
-            if "run loop already started" in str(e):
-                logger.warning("TTS run loop already started - queuing speech")
-                # Queue the speech for later
-                if not hasattr(self, '_tts_queue'):
-                    self._tts_queue = []
-                    self._tts_thread = None
-                self._tts_queue.append(text)
-                self._process_queue_async()
-            else:
-                logger.error(f"TTS speech failed: {e}")
-        except Exception as e:
-            logger.error(f"TTS speech failed: {e}")
-    
-    def _process_queue_async(self):
-        """Process TTS queue asynchronously"""
-        if self._tts_thread and self._tts_thread.is_alive():
-            return  # Already processing
-        
-        self._tts_thread = threading.Thread(target=self._process_queue, daemon=True)
-        self._tts_thread.start()
-    
-    def _process_queue(self):
-        """Process all queued TTS messages"""
-        while self._tts_queue and not self._shutdown:
-            try:
-                text = self._tts_queue.pop(0)
-                self._speak_blocking(text)
+                    # Play asynchronously
+                    sd.play(audio_array, samplerate=22050)
+
+                logger.info(f"Spoke: {text}")
+
             except Exception as e:
-                logger.error(f"Queued TTS failed: {e}")
-                if self._shutdown:
-                    break
-    
-    def _speak_blocking(self, text: str):
-        """Speak text in a blocking manner with proper cleanup"""
+                logger.error(f"Piper TTS failed: {e}")
+                self._fallback_tts(text, blocking)
+        else:
+            # Fallback to system TTS
+            self._fallback_tts(text, blocking)
+
+    def _fallback_tts(self, text: str, blocking: bool = False):
+        """Fallback TTS using pyttsx3 with proper engine management"""
         try:
-            # Create a fresh engine instance for each speech
-            engine = pyttsx3.init()
-            engine.setProperty('rate', self.rate)
-            engine.setProperty('volume', self.volume)
-            
-            # Set voice if available
-            try:
-                voices = engine.getProperty('voices')
-                if voices:
-                    for voice in voices:
-                        if 'female' in voice.name.lower() or 'zira' in voice.name.lower():
-                            engine.setProperty('voice', voice.id)
-                            break
-            except:
-                pass
-            
-            engine.say(text)
-            engine.runAndWait()
-            engine.stop()
-            
+            import pyttsx3
+
+            with self._engine_lock:
+                if self._fallback_engine is None:
+                    self._fallback_engine = pyttsx3.init()
+                    self._fallback_engine.setProperty('rate', 150)
+                    self._fallback_engine.setProperty('volume', 0.9)
+
+                if blocking:
+                    self._fallback_engine.say(text)
+                    self._fallback_engine.runAndWait()
+                else:
+                    # For async, we need to handle threading carefully
+                    def speak_async():
+                        try:
+                            with self._engine_lock:
+                                if self._fallback_engine:
+                                    self._fallback_engine.say(text)
+                                    self._fallback_engine.runAndWait()
+                        except Exception as e:
+                            logger.error(f"Async fallback TTS failed: {e}")
+
+                    thread = threading.Thread(target=speak_async, daemon=True)
+                    thread.start()
+
+            logger.info(f"Fallback TTS spoke: {text}")
+
         except Exception as e:
-            logger.error(f"Blocking TTS failed: {e}")
+            logger.error(f"Fallback TTS failed: {e}")
+
+    def speak_async(self, text: str):
+        """Speak text asynchronously"""
+        self.speak(text, blocking=False)
+
+    def speak_sync(self, text: str):
+        """Speak text synchronously"""
+        self.speak(text, blocking=True)
+
+    def shutdown(self):
+        """Shutdown TTS system"""
+        self._shutdown = True
+        if self.voice:
+            # Piper voice cleanup if needed
+            pass
+        
+        # Clean up fallback engine
+        with self._engine_lock:
+            if self._fallback_engine:
+                try:
+                    self._fallback_engine.stop()
+                except:
+                    pass
+                self._fallback_engine = None
     
     def _speak_async(self, text: str):
         """Legacy async method - now uses queue"""

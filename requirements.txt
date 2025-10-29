@@ -37,7 +37,11 @@ noisereduce>=3.0.0,<4.0.0   # Noise reduction
 # webrtcvad already specified above    # Voice Activity Detection
 
 # Text-to-Speech
-pyttsx3>=2.90,<3.0.0
+piper-tts>=1.2.0,<2.0.0
+# pyttsx3>=2.90,<3.0.0  # Replaced with Piper TTS
+
+# Intent Classification
+sentence-transformers>=2.2.0,<3.0.0
 
 # Configuration Management
 omegaconf>=2.3.0,<2.4.0
