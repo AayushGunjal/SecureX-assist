@@ -7,26 +7,110 @@ import queue
 import numpy as np
 from vosk import Model, KaldiRecognizer
 import logging
+import subprocess
+import datetime
+import random
+import psutil
+import pyautogui
 
-import contextlib
+from .intent_classifier import IntentClassifier
 
 logger = logging.getLogger(__name__)
 
 class VoiceAssistant:
     """
-    Voice Assistant: Handles activation, speech-to-text, TTS, and command processing.
+    Voice Assistant: Handles activation, speech-to-text, intent recognition, TTS, and command processing.
+    Integrated with biometric authentication for secure command execution.
     """
-    def __init__(self, model_path="vosk-model-small-en-us-0.15"):
+
+    def __init__(self, model_path="vosk-model-small-en-us-0.15", biometric_engine=None, tts_engine=None):
         self.active = False
         self.model_path = model_path
         self._vosk_model = None
-        # Disable TTS to avoid conflicts with main TTS system
-        # self._tts_queue = queue.Queue()
-        # self._tts_shutdown = threading.Event()
-        # self._tts_thread = threading.Thread(target=self._tts_worker, daemon=True)
-        # self._tts_thread.start()
+
+        # Biometric integration
+        self.biometric_engine = biometric_engine
+        self.tts_engine = tts_engine
+
+        # Intent classifier
+        self.intent_classifier = IntentClassifier()
+        self.intent_classifier.setup_default_intents()
+
+        # Session management
+        self.authenticated_session = False
+        self.session_start_time = None
+        self.session_timeout = 300  # 5 minutes
+
+        # Mic state
+        self.mic_state = "idle"  # idle, listening, processing
+
+        # Continuous listening
+        self.continuous_listening = False
+        self.listening_thread = None
+        self.audio_recorder = None
+
+        # Commands registry
         self.commands = {}
+
+        # Load model and setup
         self._load_model()
+        self.setup_default_commands()
+
+    def start_continuous_listening(self, audio_recorder, callback):
+        """Start continuous voice listening"""
+        if self.continuous_listening:
+            return
+
+        self.continuous_listening = True
+        self.audio_recorder = audio_recorder
+        self.listening_callback = callback
+
+        self.listening_thread = threading.Thread(target=self._continuous_listen, daemon=True)
+        self.listening_thread.start()
+        logger.info("Continuous listening started")
+
+    def stop_continuous_listening(self):
+        """Stop continuous voice listening"""
+        self.continuous_listening = False
+        if self.listening_thread and self.listening_thread.is_alive():
+            self.listening_thread.join(timeout=1.0)
+        logger.info("Continuous listening stopped")
+
+    def _continuous_listen(self):
+        """Continuous listening loop"""
+        while self.continuous_listening:
+            try:
+                # Record audio
+                self.set_mic_state("listening")
+                audio_path = self.audio_recorder.record_audio(duration=3.0, silence_threshold=0.5)
+
+                if audio_path and os.path.exists(audio_path):
+                    self.set_mic_state("processing")
+
+                    # Transcribe
+                    transcript = self.transcribe(str(audio_path))
+
+                    if transcript.strip():
+                        # Process command
+                        success, response = self.process_voice_command(transcript)
+
+                        # Callback to UI
+                        if self.listening_callback:
+                            self.listening_callback(transcript, response, success)
+
+                    # Cleanup
+                    try:
+                        os.remove(audio_path)
+                    except:
+                        pass
+
+                self.set_mic_state("idle")
+                time.sleep(0.5)  # Brief pause between listens
+
+            except Exception as e:
+                logger.error(f"Continuous listening error: {e}")
+                self.set_mic_state("idle")
+                time.sleep(1.0)
 
     def _load_model(self):
         try:
@@ -42,109 +126,60 @@ class VoiceAssistant:
 
     def activate(self):
         self.active = True
-        # Don't speak here - let UI handle TTS to avoid conflicts
-        # self.speak("Voice Assistant activated. Say a command.")
+        self.mic_state = "idle"
+        self.speak("Voice Assistant activated. How can I help you?")
 
     def deactivate(self, silent=False):
         self.active = False
-        # TTS disabled to avoid conflicts with main TTS system
-        # if not silent:
-        #     self.speak("Voice Assistant deactivated.")
+        self.mic_state = "idle"
+        if not silent:
+            self.speak("Voice Assistant deactivated.")
 
     def speak(self, text):
-        # TTS disabled to avoid conflicts with main TTS system
-        # if not text:
-        #     return
-        # self._tts_queue.put(text)
-        pass
+        """Speak text using TTS engine"""
+        if self.tts_engine and text:
+            self.tts_engine.speak_async(text)
+        else:
+            logger.debug(f"TTS not available or no text: {text}")
 
-    def _tts_worker(self):
-        engine = None
-        loop_started = False
+    def set_mic_state(self, state):
+        """Update microphone state"""
+        self.mic_state = state
+        logger.info(f"Mic state: {state}")
 
-        while not self._tts_shutdown.is_set():
-            try:
-                text = self._tts_queue.get(timeout=0.2)
-            except queue.Empty:
-                continue
+    def check_session_validity(self):
+        """Check if current session is still valid"""
+        if not self.authenticated_session or not self.session_start_time:
+            return False
 
-            if text is None:
-                self._tts_queue.task_done()
-                break
+        elapsed = time.time() - self.session_start_time
+        if elapsed > self.session_timeout:
+            self.authenticated_session = False
+            self.session_start_time = None
+            logger.info("Session expired")
+            return False
 
-            if engine is None:
-                try:
-                    import pyttsx3
+        return True
 
-                    engine = pyttsx3.init()
-                    engine.setProperty("rate", 170)
-                    engine.setProperty("volume", 0.88)
-                    loop_started = False  # Reset loop state when creating new engine
-                except RuntimeError as init_exc:
-                    if "run loop already started" in str(init_exc):
-                        logger.warning("Cannot initialize TTS engine - run loop already started, skipping TTS")
-                        self._tts_queue.task_done()
-                        continue
-                    else:
-                        logger.error("TTS initialization failed: %s", init_exc)
-                        self._tts_queue.task_done()
-                        continue
-                except Exception as exc:
-                    logger.error("TTS initialization failed: %s", exc)
-                    self._tts_queue.task_done()
-                    continue
+    def verify_user_voice(self, audio_sample):
+        """Verify user voice for secure commands"""
+        if not self.biometric_engine:
+            logger.warning("No biometric engine available for voice verification")
+            return False
 
-            try:
-                if not loop_started:
-                    engine.say(text)
-                    engine.runAndWait()
-                    loop_started = True
-                else:
-                    # If loop is already started, skip TTS entirely
-                    logger.warning("TTS run loop already started - skipping TTS playback")
-                    self._tts_queue.task_done()
-                    continue
-            except RuntimeError as exc:
-                if "run loop already started" in str(exc):
-                    logger.warning("TTS run loop already started - skipping TTS playback during shutdown")
-                    # Don't try to recover, just skip TTS during shutdown
-                    with contextlib.suppress(Exception):
-                        if engine:
-                            engine.stop()
-                    engine = None
-                    loop_started = False
-                else:
-                    logger.error("TTS playback failed: %s", exc)
-                    with contextlib.suppress(Exception):
-                        if engine:
-                            engine.stop()
-                    engine = None
-                    loop_started = False
-            except Exception as exc:
-                logger.error("Unexpected TTS error: %s", exc, exc_info=True)
-                with contextlib.suppress(Exception):
-                    if engine:
-                        engine.stop()
-                engine = None
-                loop_started = False
-            finally:
-                self._tts_queue.task_done()
+        try:
+            # Get current user from session
+            current_user = getattr(self.biometric_engine, 'current_user', None)
+            if not current_user:
+                return False
 
-        if engine is not None:
-            with contextlib.suppress(Exception):
-                engine.stop()
+            # Verify voice
+            is_match, similarity, details = self.biometric_engine.verify_user(audio_sample, current_user)
+            return is_match
 
-    def shutdown(self):
-        # TTS disabled, no cleanup needed
-        # self._tts_shutdown.set()
-        # self._tts_queue.put(None)
-        # if self._tts_thread.is_alive():
-        #     self._tts_thread.join(timeout=1.0)
-        pass
-
-    def register_command(self, name, handler, keywords):
-        """Register a command with handler and keywords."""
-        self.commands[name] = {"handler": handler, "keywords": keywords}
+        except Exception as e:
+            logger.error(f"Voice verification failed: {e}")
+            return False
 
     def transcribe(self, wav_path):
         """Transcribe WAV audio to text using Vosk."""
@@ -164,80 +199,244 @@ class VoiceAssistant:
         wf.close()
         return transcript.strip()
 
-    def process_voice_command(self, transcript):
-        """Process transcript and execute matching command."""
+    def process_voice_command(self, transcript, audio_sample=None):
+        """Process transcript using intent recognition and execute command."""
+        if not transcript:
+            return False, "No speech detected."
+
         transcript = transcript.lower().strip()
         logger.info("Processing command: '%s'", transcript)
+
+        # First try intent classification
+        intent, confidence = self.intent_classifier.classify(transcript)
+
+        if intent:
+            logger.info(f"Classified intent: {intent} (confidence: {confidence:.2f})")
+            response = self.execute_intent(intent, transcript, audio_sample)
+            return True, response
+
+        # Fallback to keyword matching
         for name, cmd in self.commands.items():
             for kw in cmd["keywords"]:
                 if kw in transcript:
                     logger.info("Matched command: %s", name)
-                    response = cmd["handler"](transcript)
-                    logger.info("Command response: %s", response)
+                    response = self.execute_command(name, transcript, audio_sample)
                     return True, response
-        logger.warning("No command matched for transcript: '%s'", transcript)
-        return False, "Command not recognized."
 
-    # Example built-in command
-    def _cmd_help(self, transcript):
-        cmds = [name for name in self.commands]
-        return "Available commands: " + ", ".join(cmds)
+        logger.warning("No command matched for transcript: '%s'", transcript)
+        return False, "Command not recognized. Try saying 'help' for available commands."
+
+    def execute_intent(self, intent, transcript, audio_sample=None):
+        """Execute command based on classified intent"""
+        intent_handlers = {
+            "time": self._intent_time,
+            "date": self._intent_date,
+            "open_app": self._intent_open_app,
+            "close_app": self._intent_close_app,
+            "system_lock": self._intent_system_lock,
+            "system_restart": self._intent_system_restart,
+            "system_shutdown": self._intent_system_shutdown,
+            "list_files": self._intent_list_files,
+            "delete_file": self._intent_delete_file,
+            "open_file": self._intent_open_file,
+            "play_music": self._intent_play_music,
+            "pause_music": self._intent_pause_music,
+            "mute_audio": self._intent_mute_audio,
+            "unmute_audio": self._intent_unmute_audio,
+            "system_info": self._intent_system_info,
+            "help": self._intent_help,
+            "who_are_you": self._intent_who_are_you,
+            "show_logs": self._intent_show_logs,
+            "greeting": self._intent_greeting,
+            "goodbye": self._intent_goodbye,
+        }
+
+        handler = intent_handlers.get(intent)
+        if handler:
+            return handler(transcript, audio_sample)
+        else:
+            return f"I understand you want to {intent.replace('_', ' ')}, but that feature isn't implemented yet."
+
+    def execute_command(self, command_name, transcript, audio_sample=None):
+        """Execute registered command with security checks"""
+        cmd_info = self.commands.get(command_name)
+        if not cmd_info:
+            return "Command not found."
+
+        handler = cmd_info["handler"]
+        secure = cmd_info.get("secure", False)
+
+        # Check security for sensitive commands
+        if secure:
+            if not self.check_session_validity():
+                return "Access denied — please authenticate first."
+
+            # For critical commands, re-verify voice
+            if audio_sample and not self.verify_user_voice(audio_sample):
+                self.speak("Access denied — voice not recognized.")
+                return "Access denied — voice not recognized."
+
+        # Execute command
+        try:
+            response = handler(transcript)
+            # Log action
+            self._log_action(command_name, transcript, response)
+            return response
+        except Exception as e:
+            logger.error(f"Command execution failed: {e}")
+            return "Sorry, I encountered an error executing that command."
+
+    def _log_action(self, command, transcript, response):
+        """Log assistant actions"""
+        logger.info(f"Assistant Action - Command: {command}, Input: '{transcript}', Response: '{response}'")
+
+    # Intent Handlers
+    def _intent_time(self, transcript, audio_sample=None):
+        current_time = datetime.datetime.now().strftime("%I:%M %p")
+        response = f"The current time is {current_time}."
+        self.speak(response)
+        return response
+
+    def _intent_date(self, transcript, audio_sample=None):
+        current_date = datetime.datetime.now().strftime("%A, %B %d, %Y")
+        response = f"Today is {current_date}."
+        self.speak(response)
+        return response
+
+    def _intent_open_app(self, transcript, audio_sample=None):
+        # Extract app name from transcript
+        app_keywords = {
+            "notepad": "notepad.exe",
+            "calculator": "calc.exe",
+            "explorer": "explorer.exe",
+            "chrome": "chrome.exe",
+            "firefox": "firefox.exe",
+            "word": "winword.exe",
+            "excel": "excel.exe",
+        }
+
+        for app, exe in app_keywords.items():
+            if app in transcript:
+                try:
+                    subprocess.Popen(exe)
+                    response = f"Opening {app}."
+                    self.speak(response)
+                    return response
+                except Exception as e:
+                    return f"Sorry, I couldn't open {app}."
+
+        return "Which application would you like me to open?"
+
+    def _intent_close_app(self, transcript, audio_sample=None):
+        # This is complex - would need window management
+        return "Close application feature coming soon."
+
+    def _intent_system_lock(self, transcript, audio_sample=None):
+        try:
+            os.system("rundll32.exe user32.dll,LockWorkStation")
+            response = "System locked."
+            self.speak(response)
+            return response
+        except Exception as e:
+            return "Failed to lock system."
+
+    def _intent_system_restart(self, transcript, audio_sample=None):
+        response = "Restarting system in 10 seconds. Say 'cancel' to abort."
+        self.speak(response)
+        # Would need implementation for restart
+        return response
+
+    def _intent_system_shutdown(self, transcript, audio_sample=None):
+        response = "Shutting down system in 30 seconds. Say 'cancel' to abort."
+        self.speak(response)
+        # Would need implementation for shutdown
+        return response
+
+    def _intent_list_files(self, transcript, audio_sample=None):
+        try:
+            files = os.listdir(".")
+            file_list = ", ".join(files[:10])  # Limit to 10 files
+            response = f"Files in current directory: {file_list}"
+            self.speak("Here are the files in your current directory.")
+            return response
+        except Exception as e:
+            return "Couldn't list files."
+
+    def _intent_delete_file(self, transcript, audio_sample=None):
+        return "File deletion requires confirmation. Please use the interface for now."
+
+    def _intent_open_file(self, transcript, audio_sample=None):
+        return "File opening feature coming soon."
+
+    def _intent_play_music(self, transcript, audio_sample=None):
+        # Would need media player integration
+        response = "Playing music."
+        self.speak(response)
+        return response
+
+    def _intent_pause_music(self, transcript, audio_sample=None):
+        response = "Pausing music."
+        self.speak(response)
+        return response
+
+    def _intent_mute_audio(self, transcript, audio_sample=None):
+        pyautogui.press('volumemute')
+        response = "Audio muted."
+        self.speak(response)
+        return response
+
+    def _intent_unmute_audio(self, transcript, audio_sample=None):
+        pyautogui.press('volumemute')
+        response = "Audio unmuted."
+        self.speak(response)
+        return response
+
+    def _intent_system_info(self, transcript, audio_sample=None):
+        cpu = psutil.cpu_percent()
+        memory = psutil.virtual_memory().percent
+        response = f"System status: CPU {cpu}%, Memory {memory}%."
+        self.speak(response)
+        return response
+
+    def _intent_help(self, transcript, audio_sample=None):
+        response = "I can help with time, date, opening apps, system control, and more. Just tell me what you need!"
+        self.speak(response)
+        return response
+
+    def _intent_who_are_you(self, transcript, audio_sample=None):
+        response = "I am SecureX, your offline voice assistant with biometric security."
+        self.speak(response)
+        return response
+
+    def _intent_show_logs(self, transcript, audio_sample=None):
+        return "Log viewing available in the main interface."
+
+    def _intent_greeting(self, transcript, audio_sample=None):
+        greetings = ["Hello!", "Hi there!", "Greetings!", "Good day!"]
+        response = random.choice(greetings)
+        self.speak(response)
+        return response
+
+    def _intent_goodbye(self, transcript, audio_sample=None):
+        response = "Goodbye! Have a great day."
+        self.speak(response)
+        return response
+
+    # Legacy command handlers (for backward compatibility)
+    def register_command(self, name, handler, keywords, secure=False):
+        """Register a command with handler and keywords."""
+        self.commands[name] = {"handler": handler, "keywords": keywords, "secure": secure}
 
     def setup_default_commands(self):
-        self.register_command("help", self._cmd_help, ["help", "what can you do", "commands"])
+        # Keep some legacy commands for compatibility
+        self.register_command("help", lambda t: self._intent_help(t, None), ["help", "what can you do"])
+        self.register_command("time", lambda t: self._intent_time(t, None), ["what time is it", "time"])
+        self.register_command("date", lambda t: self._intent_date(t, None), ["what date is it", "date"])
 
-        # System commands
-        self.register_command("open_calculator", self._open_calculator, ["open calculator", "calculator", "calc", "calculate", "math", "arithmetic"])
-        self.register_command("open_notepad", self._open_notepad, ["open notepad", "notepad", "text editor", "editor", "write", "note"])
-        self.register_command("open_explorer", self._open_explorer, ["open explorer", "file explorer", "explorer", "files", "file manager", "browse files"])
-        self.register_command("get_time", self._get_time, ["what time is it", "time", "current time", "tell me the time", "what's the time"])
-        self.register_command("get_date", self._get_date, ["what date is it", "date", "current date", "show date", "what's today's date", "today's date"])
-        self.register_command("system_status", self._system_status, ["system status", "status", "performance", "system info", "computer status"])
-
-        # Security commands
-        self.register_command("lock_system", self._lock_system, ["lock system", "lock computer", "lock"])
-        self.register_command("run_security_scan", self._run_security_scan, ["run security scan", "security scan", "scan security"])
-        self.register_command("show_security_logs", self._show_security_logs, ["show security logs", "security logs", "logs"])
-        self.register_command("biometric_status", self._biometric_status, ["biometric status", "biometrics", "bio status"])
-
-        # Utilities
-        self.register_command("take_screenshot", self._take_screenshot, ["take screenshot", "screenshot", "capture screen"])
-        self.register_command("show_weather", self._show_weather, ["show weather", "weather", "forecast"])
-        self.register_command("search_files", self._search_files, ["search files", "find files", "file search"])
-
-        # Communication
-        self.register_command("send_secure_message", self._send_secure_message, ["send secure message", "secure message", "send message"])
-        self.register_command("check_messages", self._check_messages, ["check messages", "messages", "new messages"])
-        self.register_command("read_last_message", self._read_last_message, ["read last message", "read message", "last message"])
-        self.register_command("start_voice_call", self._start_voice_call, ["start voice call", "voice call", "call"])
-
-        # Window commands
-        self.register_command("minimize_window", self._minimize_window, ["minimize window", "minimize", "show desktop"])
-        self.register_command("maximize_window", self._maximize_window, ["maximize window", "maximize", "fullscreen"])
-
-        # Audio commands
-        self.register_command("mute_audio", self._mute_audio, ["mute audio", "mute", "quiet"])
-        self.register_command("unmute_audio", self._unmute_audio, ["unmute audio", "unmute", "sound on"])
-        
-        # Fun and interactive commands
-        self.register_command("tell_joke", self._tell_joke, ["tell me a joke", "joke", "make me laugh", "funny"])
-        self.register_command("play_game", self._play_game, ["play a game", "game", "let's play", "entertainment"])
-        self.register_command("motivate_me", self._motivate_me, ["motivate me", "motivation", "inspire me", "encourage"])
-        self.register_command("compliment_me", self._compliment_me, ["compliment me", "nice words", "praise me"])
-        self.register_command("tell_fact", self._tell_fact, ["tell me a fact", "fact", "interesting fact", "random fact"])
-        self.register_command("sing_song", self._sing_song, ["sing a song", "song", "music", "sing"])
-        self.register_command("dance", self._dance, ["dance", "let's dance", "dancing"])
-        self.register_command("tell_story", self._tell_story, ["tell me a story", "story", "storytime"])
-        self.register_command("what_can_you_do", self._what_can_you_do, ["what can you do", "your capabilities", "help me", "assist me"])
-        self.register_command("how_are_you", self._how_are_you, ["how are you", "how do you feel", "status check"])
-        self.register_command("good_morning", self._good_morning, ["good morning", "morning", "wake up"])
-        self.register_command("good_afternoon", self._good_afternoon, ["good afternoon", "afternoon"])
-        self.register_command("good_evening", self._good_evening, ["good evening", "evening"])
-        self.register_command("good_night", self._good_night, ["good night", "night", "sleep"])
-        self.register_command("thank_you", self._thank_you, ["thank you", "thanks", "appreciate it"])
-        self.register_command("sorry", self._sorry, ["sorry", "apologize", "my bad"])
-        self.register_command("hello", self._hello, ["hello", "hi", "hey", "greetings"])
-        self.register_command("bye", self._bye, ["bye", "goodbye", "see you", "farewell"])
+        # Secure commands
+        self.register_command("lock_system", lambda t: self._intent_system_lock(t, None), ["lock system", "lock"], secure=True)
+        self.register_command("system_restart", lambda t: self._intent_system_restart(t, None), ["restart system", "restart"], secure=True)
+        self.register_command("system_shutdown", lambda t: self._intent_system_shutdown(t, None), ["shutdown system", "shutdown"], secure=True)
 
     def get_available_commands(self):
         """Get a formatted string of all available voice commands."""
@@ -247,117 +446,20 @@ class VoiceAssistant:
         command_list = []
         for name, cmd_info in self.commands.items():
             keywords = cmd_info.get("keywords", [])
+            secure = cmd_info.get("secure", False)
             if keywords:
-                command_list.append(f"• {name}: {', '.join(keywords[:3])}")  # Show first 3 keywords
+                cmd_str = f"{name}: {', '.join(keywords)}"
+                if secure:
+                    cmd_str += " (secure)"
+                command_list.append(cmd_str)
 
-        return "\n".join(command_list)
+        return "Available commands:\n" + "\n".join(command_list)
 
-    # ==================== CONTINUOUS LISTENING ====================
-
-    def start_continuous_listening(self, audio_processor, callback=None):
-        """
-        Start continuous voice listening in a background thread.
-        Uses VAD to detect speech segments and process commands automatically.
-
-        Args:
-            audio_processor: AudioProcessor instance for recording and VAD
-            callback: Optional callback function to update UI (transcript, response)
-        """
-        if hasattr(self, '_continuous_thread') and self._continuous_thread and self._continuous_thread.is_alive():
-            print("Continuous listening already running")
-            return
-
-        self._continuous_listening = True
-        self._continuous_thread = threading.Thread(
-            target=self._continuous_listening_loop,
-            args=(audio_processor, callback),
-            daemon=True
-        )
-        self._continuous_thread.start()
-        logger.info("Continuous listening started")
-
-    def stop_continuous_listening(self):
-        """Stop continuous voice listening"""
-        self._continuous_listening = False
-        if hasattr(self, '_continuous_thread') and self._continuous_thread:
-            self._continuous_thread.join(timeout=2.0)
-        logger.info("Continuous listening stopped")
-
-    def _continuous_listening_loop(self, audio_processor, callback):
-        """
-        Main continuous listening loop.
-        Records audio in chunks, detects speech, accumulates audio during speech,
-        transcribes when speech ends, and processes commands.
-        """
-        try:
-            # Initialize VAD
-            vad = audio_processor.vad_detector
-            recorder = audio_processor.recorder
-
-            # Configuration
-            chunk_duration = 0.5  # Process 0.5 second chunks
-            silence_threshold = 1.5  # Stop listening after 1.5s of silence
-            min_speech_duration = 1.0  # Minimum speech segment to process
-
-            speech_buffer = []
-            silence_counter = 0
-            is_speaking = False
-
-            logger.debug("Listening for voice commands")
-
-            while self._continuous_listening:
-                try:
-                    # Record a chunk
-                    chunk = recorder.record_audio(
-                        duration=chunk_duration,
-                        reduce_noise=True
-                    )
-
-                    if chunk is None:
-                        time.sleep(0.1)
-                        continue
-
-                    # Check for voice activity
-                    has_voice, rms = vad.detect_voice_rms(chunk)
-
-                    if has_voice:
-                        if not is_speaking:
-                            # Speech started
-                            is_speaking = True
-                            speech_buffer = []
-                            silence_counter = 0
-                            logger.debug("Speech detected - accumulating audio")
-
-                        # Accumulate speech audio
-                        speech_buffer.append(chunk)
-                        silence_counter = 0
-
-                    elif is_speaking:
-                        # Silence detected during speech
-                        silence_counter += chunk_duration
-
-                        if silence_counter >= silence_threshold:
-                            # Speech ended - process the accumulated audio
-                            if speech_buffer:
-                                self._process_speech_segment(speech_buffer, recorder, callback)
-
-                            # Reset for next speech segment
-                            speech_buffer = []
-                            is_speaking = False
-                            silence_counter = 0
-                            logger.debug("Ready for next command")
-
-                    # Small delay to prevent CPU hogging
-                    time.sleep(0.05)
-
-                except Exception as e:
-                    logger.error("Error in continuous listening loop: %s", e, exc_info=True)
-                    time.sleep(0.5)
-
-        except Exception as e:
-            logger.error("Continuous listening failed: %s", e, exc_info=True)
-        finally:
-            logger.info("Continuous listening loop ended")
+    def shutdown(self):
+        """Shutdown the voice assistant"""
+        self.deactivate(silent=True)
+        self.stop_continuous_listening()
+        logger.info("Voice Assistant shutdown complete")
 
     def _process_speech_segment(self, speech_buffer, recorder, callback):
         """

@@ -46,6 +46,12 @@ augmentation:
   speed_factor: [0.95, 1.05]  # ±5% speed variation
   noise_level: 0.01  # Background noise addition level
 
+tts:
+  enabled: true
+  model_path: "en_US-lessac-medium.onnx"  # Piper TTS model path
+  rate: 1.0
+  volume: 0.9
+
 models:
   primary_embedding: "pyannote/embedding"
   fallback_embedding: "speechbrain/spkrec-ecapa-voxceleb"

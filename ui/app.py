@@ -275,7 +275,7 @@ class SecureXApp:
                 weight=ft.FontWeight.W_600,
             ),
         )
-        
+
         self.password_field = ft.TextField(
             label="PASSWORD",
             hint_text="Enter your password",
@@ -297,7 +297,7 @@ class SecureXApp:
                 weight=ft.FontWeight.W_600,
             ),
         )
-        
+
         # Registration fields
         self.reg_username_field = ft.TextField(
             label="USERNAME",
@@ -319,7 +319,7 @@ class SecureXApp:
                 weight=ft.FontWeight.W_600,
             ),
         )
-        
+
         self.reg_password_field = ft.TextField(
             label="PASSWORD",
             hint_text="Create a secure password",
@@ -342,7 +342,7 @@ class SecureXApp:
                 weight=ft.FontWeight.W_600,
             ),
         )
-        
+
         self.reg_confirm_password_field = ft.TextField(
             label="CONFIRM PASSWORD",
             hint_text="Re-enter your password",
@@ -364,7 +364,7 @@ class SecureXApp:
                 weight=ft.FontWeight.W_600,
             ),
         )
-        
+
         self.reg_email_field = ft.TextField(
             label="EMAIL (OPTIONAL)",
             hint_text="your@email.com",
@@ -385,7 +385,7 @@ class SecureXApp:
                 weight=ft.FontWeight.W_600,
             ),
         )
-        
+
         # Progress indicators
         self.progress_ring = ft.ProgressRing(
             visible=False,
@@ -802,88 +802,6 @@ class SecureXApp:
         
         self.page.update()
 
-    # ==================== DASHBOARD VIEW ====================
-    
-    def build_dashboard_view(self) -> ft.Container:
-        """Build futuristic cyber-security themed dashboard with sidebar navigation"""
-        logger.info("=== BUILD_DASHBOARD_VIEW CALLED ===")
-        try:
-            username = self.current_user.username if self.current_user else "User"
-            logger.info(f"Building dashboard for user: {username}")
-
-            # Create components one by one with error handling
-            try:
-                sidebar = self._create_sidebar()
-                logger.info("[OK] Sidebar created")
-            except Exception as e:
-                logger.error(f"[ERROR] Sidebar failed: {e}")
-                raise
-
-            try:
-                header = self._create_header(username)
-                logger.info("[OK] Header created")
-            except Exception as e:
-                logger.error(f"[ERROR] Header failed: {e}")
-                raise
-
-            try:
-                main_content = self._create_main_content()
-                logger.info("[OK] Main content created")
-            except Exception as e:
-                logger.error(f"[ERROR] Main content failed: {e}")
-                raise
-
-            try:
-                voice_dock = self._create_voice_dock()
-                logger.info("[OK] Voice dock created")
-            except Exception as e:
-                logger.error(f"[ERROR] Voice dock failed: {e}")
-                raise
-
-            # Build the final dashboard structure
-            dashboard = ft.Container(
-                content=ft.Column([
-                    header,
-                    ft.Container(
-                        content=ft.Row([
-                            sidebar,
-                            ft.Container(
-                                content=ft.Column([
-                                    main_content,
-                                    voice_dock,
-                                ], spacing=0),
-                                expand=True,
-                            ),
-                        ], spacing=0),
-                        expand=True,
-                    ),
-                ], spacing=0),
-                expand=True,
-                bgcolor=SciFiColors.BG_SPACE,
-            )
-            
-            logger.info("=== DASHBOARD CONTAINER BUILT SUCCESSFULLY ===")
-            return dashboard
-            
-        except Exception as e:
-            logger.error(f"=== BUILD_DASHBOARD_VIEW FAILED ===")
-            logger.error(f"Error: {e}", exc_info=True)
-            
-            # Return error container instead of None
-            return ft.Container(
-                content=ft.Column([
-                    ft.Icon(ft.Icons.ERROR_OUTLINE, size=64, color=SciFiColors.ERROR),
-                    ft.Container(height=20),
-                    ft.Text("Failed to Build Dashboard", size=20, color=SciFiColors.ERROR, weight=ft.FontWeight.BOLD),
-                    ft.Container(height=10),
-                    ft.Text(str(e), size=12, color=SciFiColors.TEXT_SECONDARY, text_align=ft.TextAlign.CENTER),
-                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-                alignment=ft.alignment.center,
-                expand=True,
-                bgcolor=SciFiColors.BG_SPACE,
-                padding=40,
-            )
-
     def _create_sidebar(self) -> ft.Container:
         """Create left sidebar navigation with icons and text"""
         nav_items = [
@@ -1093,51 +1011,94 @@ class SecureXApp:
             )
 
     def _create_dashboard_content(self) -> ft.Container:
-        """Create main dashboard with three panels: Security, Assistant, System"""
+        """Create main dashboard with enhanced three panels: Security, Assistant, System"""
         return ft.Container(
             content=ft.Column([
-                # Title
+                # Welcome header
                 ft.Container(
-                    content=ft.Text(
-                        "SYSTEM DASHBOARD",
-                        size=24,
-                        weight=ft.FontWeight.BOLD,
-                        color=SciFiColors.TEXT_PRIMARY,
-                        font_family="Orbitron",
-                    ),
+                    content=ft.Column([
+                        ft.Text(
+                            "SECUREX DASHBOARD",
+                            size=28,
+                            weight=ft.FontWeight.BOLD,
+                            color=SciFiColors.TEXT_PRIMARY,
+                            font_family="Orbitron",
+                        ),
+                        ft.Text(
+                            "Advanced Biometric Security & Voice Assistant System",
+                            size=14,
+                            color=SciFiColors.TEXT_SECONDARY,
+                        ),
+                        ft.Container(
+                            content=ft.Row([
+                                ft.Icon(ft.Icons.VERIFIED_USER_ROUNDED, color=SciFiColors.SUCCESS, size=16),
+                                ft.Text(
+                                    f"Authenticated as {self.current_user['username'] if self.current_user else 'Unknown'}",
+                                    size=12,
+                                    color=SciFiColors.SUCCESS,
+                                    weight=ft.FontWeight.W_600,
+                                ),
+                            ], spacing=8),
+                            padding=ft.padding.symmetric(horizontal=16, vertical=8),
+                            border_radius=20,
+                            bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.SUCCESS),
+                            border=ft.border.all(1, SciFiColors.SUCCESS),
+                        ),
+                    ], spacing=8, horizontal_alignment=ft.CrossAxisAlignment.START),
                     padding=ft.padding.symmetric(vertical=20, horizontal=20),
                 ),
-                # Three-panel grid
+
+                # Enhanced three-panel grid with better spacing
                 ft.Container(
                     content=ft.Row([
                         # Security Panel
                         ft.Container(
                             content=self._create_security_panel(),
                             expand=1,
-                            padding=ft.padding.all(10),
+                            padding=ft.padding.all(15),
+                            margin=ft.margin.all(5),
                         ),
                         # Assistant Panel
                         ft.Container(
                             content=self._create_assistant_panel(),
                             expand=1,
-                            padding=ft.padding.all(10),
+                            padding=ft.padding.all(15),
+                            margin=ft.margin.all(5),
                         ),
                         # System Panel
                         ft.Container(
                             content=self._create_system_panel(),
                             expand=1,
-                            padding=ft.padding.all(10),
+                            padding=ft.padding.all(15),
+                            margin=ft.margin.all(5),
                         ),
-                    ], spacing=20, alignment=ft.MainAxisAlignment.START),
-                    height=350,
+                    ], spacing=10, alignment=ft.MainAxisAlignment.START, wrap=True),
+                    height=380,
                 ),
-                # Actions section
+
+                # Enhanced actions section with better organization
                 ft.Container(
                     content=self._create_actions_section(),
-                    padding=ft.padding.symmetric(vertical=20),
+                    padding=ft.padding.symmetric(vertical=25, horizontal=20),
+                    margin=ft.margin.only(top=10),
                 ),
+
+                # Quick stats footer
+                ft.Container(
+                    content=ft.Row([
+                        self._create_quick_stat("Voice Commands", "35+", SciFiColors.PRIMARY),
+                        self._create_quick_stat("Security Level", "Ultra", SciFiColors.SUCCESS),
+                        self._create_quick_stat("Uptime", "Stable", SciFiColors.INFO),
+                        self._create_quick_stat("AI Models", "Active", SciFiColors.ACCENT),
+                    ], spacing=20, alignment=ft.MainAxisAlignment.CENTER),
+                    padding=ft.padding.symmetric(vertical=15),
+                    bgcolor=ft.Colors.with_opacity(0.05, SciFiColors.BG_ELEVATED),
+                    border_radius=10,
+                    margin=ft.margin.symmetric(horizontal=20),
+                ),
+
             ], spacing=0, scroll=ft.ScrollMode.AUTO),
-            padding=ft.padding.all(20),
+            padding=ft.padding.all(0),
             expand=True,
         )
 
@@ -1212,36 +1173,160 @@ class SecureXApp:
         )
 
     def _create_assistant_panel(self) -> ft.Container:
-        """Create assistant panel with voice activity visualization"""
+        """Create enhanced assistant panel with real-time voice activity visualization"""
+        # Get current voice assistant status
+        mic_status = "IDLE"
+        auth_status = "NONE"
+        if hasattr(self.voice_assistant, 'mic_state'):
+            mic_status = self.voice_assistant.mic_state.upper()
+        if hasattr(self.voice_assistant, 'authenticated_session') and self.voice_assistant.authenticated_session:
+            auth_status = "ACTIVE"
+
         return ft.Container(
             content=ft.Column([
                 ft.Row([
                     ft.Icon(ft.Icons.MIC_ROUNDED, color=SciFiColors.PRIMARY, size=20),
                     ft.Text("VOICE ASSISTANT", size=16, weight=ft.FontWeight.BOLD, font_family="Orbitron"),
+                    ft.Container(expand=True),
+                    ft.Container(
+                        content=ft.Text(
+                            "●" if self.voice_assistant_active else "○",
+                            size=12,
+                            color=SciFiColors.SUCCESS if self.voice_assistant_active else SciFiColors.TEXT_MUTED,
+                        ),
+                        tooltip="Assistant Status",
+                    ),
                 ], spacing=8),
-                ft.Container(height=20),
+
+                ft.Container(height=15),
+
+                # Status indicators with real data
+                ft.Column([
+                    ft.Row([
+                        ft.Container(
+                            content=ft.Row([
+                                ft.Icon(ft.Icons.MIC_ROUNDED, color=SciFiColors.PRIMARY, size=14),
+                                ft.Text("MIC", size=10, color=SciFiColors.TEXT_SECONDARY),
+                                ft.Container(width=6),
+                                ft.Text(
+                                    mic_status,
+                                    size=10,
+                                    color=SciFiColors.PRIMARY if mic_status == "LISTENING" else SciFiColors.TEXT_SECONDARY,
+                                    weight=ft.FontWeight.W_600
+                                ),
+                            ], spacing=4),
+                            padding=ft.padding.symmetric(horizontal=10, vertical=6),
+                            border_radius=15,
+                            bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.PRIMARY),
+                        ),
+                        ft.Container(width=8),
+                        ft.Container(
+                            content=ft.Row([
+                                ft.Icon(ft.Icons.SECURITY_ROUNDED, color=SciFiColors.SUCCESS, size=14),
+                                ft.Text("AUTH", size=10, color=SciFiColors.TEXT_SECONDARY),
+                                ft.Container(width=6),
+                                ft.Text(
+                                    auth_status,
+                                    size=10,
+                                    color=SciFiColors.SUCCESS if auth_status == "ACTIVE" else SciFiColors.WARNING,
+                                    weight=ft.FontWeight.W_600
+                                ),
+                            ], spacing=4),
+                            padding=ft.padding.symmetric(horizontal=10, vertical=6),
+                            border_radius=15,
+                            bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.SUCCESS),
+                        ),
+                    ], spacing=0),
+                ], spacing=8),
+
+                ft.Container(height=15),
+
+                # Enhanced voice visualization
                 ft.Container(
                     content=ft.Column([
+                        # Animated bars when active
                         ft.Row([
-                            ft.Container(width=4, height=20 + rnd.randint(0, 20), bgcolor=SciFiColors.PRIMARY, border_radius=2),
-                            ft.Container(width=4, height=15 + rnd.randint(0, 25), bgcolor=SciFiColors.ACCENT, border_radius=2),
-                            ft.Container(width=4, height=25 + rnd.randint(0, 15), bgcolor=SciFiColors.PRIMARY, border_radius=2),
-                            ft.Container(width=4, height=10 + rnd.randint(0, 30), bgcolor=SciFiColors.ACCENT, border_radius=2),
-                            ft.Container(width=4, height=30 + rnd.randint(0, 10), bgcolor=SciFiColors.PRIMARY, border_radius=2),
-                            ft.Container(width=4, height=20 + rnd.randint(0, 20), bgcolor=SciFiColors.ACCENT, border_radius=2),
-                            ft.Container(width=4, height=15 + rnd.randint(0, 25), bgcolor=SciFiColors.PRIMARY, border_radius=2),
-                        ], spacing=6, alignment=ft.MainAxisAlignment.CENTER),
-                        ft.Container(height=20),
+                            ft.Container(
+                                width=4,
+                                height=20 + (rnd.randint(0, 20) if self.voice_assistant_active else 5),
+                                bgcolor=SciFiColors.PRIMARY,
+                                border_radius=2,
+                                animate=ft.animation.Animation(300, ft.AnimationCurve.EASE_IN_OUT) if self.voice_assistant_active else None,
+                            ),
+                            ft.Container(width=3),
+                            ft.Container(
+                                width=4,
+                                height=15 + (rnd.randint(0, 25) if self.voice_assistant_active else 5),
+                                bgcolor=SciFiColors.ACCENT,
+                                border_radius=2,
+                                animate=ft.animation.Animation(300, ft.AnimationCurve.EASE_IN_OUT) if self.voice_assistant_active else None,
+                            ),
+                            ft.Container(width=3),
+                            ft.Container(
+                                width=4,
+                                height=25 + (rnd.randint(0, 15) if self.voice_assistant_active else 5),
+                                bgcolor=SciFiColors.PRIMARY,
+                                border_radius=2,
+                                animate=ft.animation.Animation(300, ft.AnimationCurve.EASE_IN_OUT) if self.voice_assistant_active else None,
+                            ),
+                            ft.Container(width=3),
+                            ft.Container(
+                                width=4,
+                                height=10 + (rnd.randint(0, 30) if self.voice_assistant_active else 5),
+                                bgcolor=SciFiColors.ACCENT,
+                                border_radius=2,
+                                animate=ft.animation.Animation(300, ft.AnimationCurve.EASE_IN_OUT) if self.voice_assistant_active else None,
+                            ),
+                            ft.Container(width=3),
+                            ft.Container(
+                                width=4,
+                                height=30 + (rnd.randint(0, 10) if self.voice_assistant_active else 5),
+                                bgcolor=SciFiColors.PRIMARY,
+                                border_radius=2,
+                                animate=ft.animation.Animation(300, ft.AnimationCurve.EASE_IN_OUT) if self.voice_assistant_active else None,
+                            ),
+                            ft.Container(width=3),
+                            ft.Container(
+                                width=4,
+                                height=20 + (rnd.randint(0, 20) if self.voice_assistant_active else 5),
+                                bgcolor=SciFiColors.ACCENT,
+                                border_radius=2,
+                                animate=ft.animation.Animation(300, ft.AnimationCurve.EASE_IN_OUT) if self.voice_assistant_active else None,
+                            ),
+                            ft.Container(width=3),
+                            ft.Container(
+                                width=4,
+                                height=15 + (rnd.randint(0, 25) if self.voice_assistant_active else 5),
+                                bgcolor=SciFiColors.PRIMARY,
+                                border_radius=2,
+                                animate=ft.animation.Animation(300, ft.AnimationCurve.EASE_IN_OUT) if self.voice_assistant_active else None,
+                            ),
+                        ], spacing=0, alignment=ft.MainAxisAlignment.CENTER),
+
+                        ft.Container(height=12),
+
                         ft.Text(
-                            "READY FOR COMMANDS",
-                            size=12,
-                            color=SciFiColors.TEXT_SECONDARY,
+                            "LISTENING..." if self.voice_assistant_active else "READY FOR COMMANDS",
+                            size=11,
+                            color=SciFiColors.SUCCESS if self.voice_assistant_active else SciFiColors.TEXT_SECONDARY,
                             weight=ft.FontWeight.W_600,
+                            text_align=ft.TextAlign.CENTER,
                         ),
+
+                        # Commands count
+                        ft.Container(height=8),
+                        ft.Text(
+                            f"35+ Commands Available",
+                            size=9,
+                            color=SciFiColors.TEXT_MUTED,
+                            text_align=ft.TextAlign.CENTER,
+                        ),
+
                     ], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
                     height=120,
                     alignment=ft.alignment.center,
                 ),
+
             ], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             padding=20,
             bgcolor=ft.Colors.with_opacity(0.6, SciFiColors.BG_CARD),
@@ -1358,22 +1443,116 @@ class SecureXApp:
         )
 
     def _create_assistant_content(self) -> ft.Container:
+        """Create voice assistant interface with controls and status"""
         return ft.Container(
             content=ft.Column([
                 ft.Text("VOICE ASSISTANT", size=24, weight=ft.FontWeight.BOLD, font_family="Orbitron"),
                 ft.Container(height=20),
-                ft.Text("Voice assistant controls will appear here.", color=SciFiColors.TEXT_SECONDARY, size=14),
-                ft.Container(height=20),
-                ft.ElevatedButton(
-                    "Open Voice Assistant",
-                    icon=ft.Icons.MIC_ROUNDED,
-                    on_click=self._show_voice_dialog,
-                    style=ft.ButtonStyle(
-                        bgcolor=SciFiColors.PRIMARY,
-                        color=SciFiColors.BG_DARK,
+
+                # Status indicators
+                ft.Row([
+                    ft.Container(
+                        content=ft.Row([
+                            ft.Icon(ft.Icons.MIC_ROUNDED, color=SciFiColors.PRIMARY, size=16),
+                            ft.Text("VOICE", size=12, color=SciFiColors.TEXT_SECONDARY),
+                            ft.Container(width=8),
+                            ft.Text(
+                                self.voice_assistant.mic_state.upper() if hasattr(self.voice_assistant, 'mic_state') else "IDLE",
+                                size=12,
+                                color=SciFiColors.PRIMARY if (hasattr(self.voice_assistant, 'mic_state') and self.voice_assistant.mic_state == "listening") else SciFiColors.TEXT_SECONDARY,
+                                weight=ft.FontWeight.W_600
+                            ),
+                        ], spacing=6),
+                        padding=ft.padding.symmetric(horizontal=12, vertical=6),
+                        border_radius=20,
+                        bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.PRIMARY),
                     ),
+                    ft.Container(width=12),
+                    ft.Container(
+                        content=ft.Row([
+                            ft.Icon(ft.Icons.VERIFIED_USER_ROUNDED, color=SciFiColors.SUCCESS, size=16),
+                            ft.Text("AUTH", size=12, color=SciFiColors.TEXT_SECONDARY),
+                            ft.Container(width=8),
+                            ft.Text(
+                                "ACTIVE" if (hasattr(self.voice_assistant, 'authenticated_session') and self.voice_assistant.authenticated_session) else "NONE",
+                                size=12,
+                                color=SciFiColors.SUCCESS if (hasattr(self.voice_assistant, 'authenticated_session') and self.voice_assistant.authenticated_session) else SciFiColors.WARNING,
+                                weight=ft.FontWeight.W_600
+                            ),
+                        ], spacing=6),
+                        padding=ft.padding.symmetric(horizontal=12, vertical=6),
+                        border_radius=20,
+                        bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.SUCCESS),
+                    ),
+                ], spacing=0),
+
+                ft.Container(height=20),
+
+                # Voice visualization (animated when active)
+                ft.Container(
+                    content=ft.Column([
+                        ft.Row([
+                            ft.Container(width=4, height=20, bgcolor=SciFiColors.PRIMARY, border_radius=2),
+                            ft.Container(width=4, height=15, bgcolor=SciFiColors.ACCENT, border_radius=2),
+                            ft.Container(width=4, height=25, bgcolor=SciFiColors.PRIMARY, border_radius=2),
+                            ft.Container(width=4, height=10, bgcolor=SciFiColors.ACCENT, border_radius=2),
+                            ft.Container(width=4, height=30, bgcolor=SciFiColors.PRIMARY, border_radius=2),
+                            ft.Container(width=4, height=20, bgcolor=SciFiColors.ACCENT, border_radius=2),
+                            ft.Container(width=4, height=15, bgcolor=SciFiColors.PRIMARY, border_radius=2),
+                        ], spacing=6, alignment=ft.MainAxisAlignment.CENTER),
+                        ft.Container(height=16),
+                        ft.Text(
+                            "READY FOR COMMANDS" if not self.voice_assistant_active else "LISTENING...",
+                            size=12,
+                            color=SciFiColors.TEXT_SECONDARY,
+                            weight=ft.FontWeight.W_600,
+                        ),
+                    ], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                    height=120,
+                    alignment=ft.alignment.center,
                 ),
-            ]),
+
+                ft.Container(height=20),
+
+                # Control buttons
+                ft.Row([
+                    ft.ElevatedButton(
+                        "🎤 START VOICE ASSISTANT",
+                        icon=ft.Icons.MIC_ROUNDED,
+                        on_click=self._show_voice_dialog,
+                        style=ft.ButtonStyle(
+                            bgcolor=SciFiColors.PRIMARY,
+                            color=SciFiColors.BG_DARK,
+                        ),
+                        disabled=self.voice_assistant_active,
+                    ),
+                    ft.Container(width=12),
+                    ft.OutlinedButton(
+                        "📋 VIEW COMMANDS",
+                        icon=ft.Icons.LIST_ROUNDED,
+                        on_click=self._show_commands_dialog,
+                        style=ft.ButtonStyle(
+                            color=SciFiColors.TEXT_SECONDARY,
+                            side=ft.BorderSide(1, SciFiColors.BORDER),
+                        ),
+                    ),
+                ], spacing=0, alignment=ft.MainAxisAlignment.CENTER),
+
+                ft.Container(height=16),
+
+                # Recent commands
+                ft.Container(
+                    content=ft.Column([
+                        ft.Text("RECENT ACTIVITY", size=14, weight=ft.FontWeight.BOLD, color=SciFiColors.TEXT_SECONDARY),
+                        ft.Container(height=8),
+                        ft.Text("No recent commands", size=12, color=SciFiColors.TEXT_MUTED, italic=True),
+                    ], spacing=0),
+                    padding=16,
+                    border_radius=8,
+                    bgcolor=ft.Colors.with_opacity(0.3, SciFiColors.BG_ELEVATED),
+                ),
+
+            ], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             padding=40,
             alignment=ft.alignment.center,
         )
@@ -1412,25 +1591,40 @@ class SecureXApp:
         )
 
     def _create_voice_dock(self) -> ft.Container:
+        """Create enhanced voice dock with real-time status and controls"""
+        # Get current status
+        mic_status = "IDLE"
+        auth_status = "NONE"
+        last_command = "Ready for voice commands..."
+
+        if hasattr(self.voice_assistant, 'mic_state'):
+            mic_status = self.voice_assistant.mic_state.upper()
+        if hasattr(self.voice_assistant, 'authenticated_session') and self.voice_assistant.authenticated_session:
+            auth_status = "ACTIVE"
+
         return ft.Container(
             content=ft.Row([
+                # Voice assistant button with status
                 ft.Container(
                     content=ft.Row([
                         ft.Container(
                             content=ft.IconButton(
                                 icon=ft.Icons.MIC_ROUNDED,
                                 icon_size=28,
-                                icon_color=SciFiColors.TEXT_PRIMARY,
+                                icon_color=SciFiColors.TEXT_PRIMARY if not self.voice_assistant_active else SciFiColors.SUCCESS,
                                 on_click=self._show_voice_dialog,
                                 style=ft.ButtonStyle(
-                                    bgcolor=ft.Colors.with_opacity(0.2, SciFiColors.PRIMARY),
+                                    bgcolor=ft.Colors.with_opacity(
+                                        0.3 if self.voice_assistant_active else 0.2,
+                                        SciFiColors.SUCCESS if self.voice_assistant_active else SciFiColors.PRIMARY
+                                    ),
                                     shape=ft.CircleBorder(),
                                 ),
                             ),
                             width=60,
                             height=60,
                             border_radius=30,
-                            border=ft.border.all(2, SciFiColors.PRIMARY),
+                            border=ft.border.all(2, SciFiColors.SUCCESS if self.voice_assistant_active else SciFiColors.PRIMARY),
                             alignment=ft.alignment.center,
                         ),
                         ft.Container(width=16),
@@ -1441,16 +1635,79 @@ class SecureXApp:
                                 color=SciFiColors.TEXT_SECONDARY,
                                 weight=ft.FontWeight.W_600,
                             ),
-                            ft.Text(
-                                "Click to activate",
-                                size=9,
-                                color=SciFiColors.TEXT_MUTED,
-                            ),
+                            ft.Row([
+                                ft.Container(
+                                    width=6,
+                                    height=6,
+                                    border_radius=3,
+                                    bgcolor=SciFiColors.SUCCESS if self.voice_assistant_active else SciFiColors.TEXT_MUTED,
+                                ),
+                                ft.Container(width=4),
+                                ft.Text(
+                                    "Active" if self.voice_assistant_active else "Ready",
+                                    size=9,
+                                    color=SciFiColors.SUCCESS if self.voice_assistant_active else SciFiColors.TEXT_MUTED,
+                                ),
+                            ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                         ], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.START),
                     ], spacing=0, alignment=ft.MainAxisAlignment.START),
                     padding=ft.padding.symmetric(horizontal=20, vertical=10),
                 ),
+
                 ft.Container(expand=True),
+
+                # Status indicators
+                ft.Container(
+                    content=ft.Row([
+                        # Mic status
+                        ft.Container(
+                            content=ft.Row([
+                                ft.Icon(
+                                    ft.Icons.MIC_ROUNDED,
+                                    size=12,
+                                    color=SciFiColors.PRIMARY if mic_status == "LISTENING" else SciFiColors.TEXT_MUTED
+                                ),
+                                ft.Text(
+                                    mic_status,
+                                    size=9,
+                                    color=SciFiColors.PRIMARY if mic_status == "LISTENING" else SciFiColors.TEXT_MUTED,
+                                    weight=ft.FontWeight.W_600,
+                                ),
+                            ], spacing=4),
+                            padding=ft.padding.symmetric(horizontal=8, vertical=4),
+                            border_radius=12,
+                            bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.PRIMARY),
+                        ),
+
+                        ft.Container(width=8),
+
+                        # Auth status
+                        ft.Container(
+                            content=ft.Row([
+                                ft.Icon(
+                                    ft.Icons.SECURITY_ROUNDED,
+                                    size=12,
+                                    color=SciFiColors.SUCCESS if auth_status == "ACTIVE" else SciFiColors.WARNING
+                                ),
+                                ft.Text(
+                                    auth_status,
+                                    size=9,
+                                    color=SciFiColors.SUCCESS if auth_status == "ACTIVE" else SciFiColors.WARNING,
+                                    weight=ft.FontWeight.W_600,
+                                ),
+                            ], spacing=4),
+                            padding=ft.padding.symmetric(horizontal=8, vertical=4),
+                            border_radius=12,
+                            bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.SUCCESS if auth_status == "ACTIVE" else SciFiColors.WARNING),
+                        ),
+
+                    ], spacing=0),
+                    padding=ft.padding.symmetric(horizontal=16, vertical=8),
+                ),
+
+                ft.Container(expand=True),
+
+                # Transcript area
                 ft.Container(
                     content=ft.Column([
                         ft.Text(
@@ -1461,20 +1718,58 @@ class SecureXApp:
                         ),
                         ft.Container(
                             content=ft.Text(
-                                "Ready for voice commands...",
-                                size=12,
+                                last_command,
+                                size=11,
                                 color=SciFiColors.TEXT_SECONDARY,
+                                max_lines=2,
+                                overflow=ft.TextOverflow.ELLIPSIS,
                             ),
-                            height=40,
+                            height=35,
                             alignment=ft.alignment.center_left,
                         ),
                     ], spacing=4),
-                    width=300,
+                    width=280,
                     padding=ft.padding.symmetric(horizontal=16, vertical=8),
                     border_radius=8,
                     bgcolor=ft.Colors.with_opacity(0.3, SciFiColors.BG_DARK),
                     border=ft.border.all(1, SciFiColors.BORDER),
                 ),
+
+                # Quick actions
+                ft.Container(
+                    content=ft.Row([
+                        ft.IconButton(
+                            icon=ft.Icons.LIST_ROUNDED,
+                            icon_size=20,
+                            icon_color=SciFiColors.TEXT_SECONDARY,
+                            tooltip="View Commands",
+                            on_click=self._show_commands_dialog,
+                            style=ft.ButtonStyle(
+                                bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.BORDER),
+                                shape=ft.CircleBorder(),
+                            ),
+                        ),
+                        ft.Container(width=4),
+                        ft.IconButton(
+                            icon=ft.Icons.SETTINGS_ROUNDED,
+                            icon_size=20,
+                            icon_color=SciFiColors.TEXT_SECONDARY,
+                            tooltip="Voice Settings",
+                            on_click=lambda e: self._show_modern_dialog(
+                                "VOICE SETTINGS",
+                                ft.Text("Voice settings will be available here.", color=SciFiColors.TEXT_SECONDARY),
+                                SciFiColors.PRIMARY,
+                                ft.Icons.SETTINGS_ROUNDED
+                            ),
+                            style=ft.ButtonStyle(
+                                bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.BORDER),
+                                shape=ft.CircleBorder(),
+                            ),
+                        ),
+                    ], spacing=0),
+                    padding=ft.padding.symmetric(horizontal=12, vertical=8),
+                ),
+
             ], spacing=0, alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             height=80,
             bgcolor=ft.Colors.with_opacity(0.9, SciFiColors.BG_ELEVATED),
@@ -1496,6 +1791,39 @@ class SecureXApp:
             self._show_error_toast(f"Navigation failed: {str(e)}")
 
     # ==================== VOICE ASSISTANT DIALOG ====================
+    
+    def _show_commands_dialog(self, e):
+        """Show available voice commands dialog"""
+        try:
+            commands_text = self.voice_assistant.get_available_commands()
+
+            dialog = ft.AlertDialog(
+                modal=True,
+                title=ft.Row([
+                    ft.Icon(ft.Icons.LIST_ROUNDED, color=SciFiColors.PRIMARY, size=28),
+                    ft.Text("AVAILABLE COMMANDS", size=18, weight=ft.FontWeight.BOLD, font_family="Orbitron"),
+                ], spacing=12),
+                content=ft.Container(
+                    content=ft.Text(commands_text, size=12, color=SciFiColors.TEXT_PRIMARY),
+                    height=300,
+                    width=400,
+                ),
+                actions=[
+                    ft.TextButton(
+                        "CLOSE",
+                        on_click=lambda _: self.page.dialog.close(),
+                        style=ft.ButtonStyle(color=SciFiColors.TEXT_SECONDARY),
+                    ),
+                ],
+                bgcolor=SciFiColors.BG_CARD,
+                shape=ft.RoundedRectangleBorder(radius=10),
+            )
+
+            self._open_dialog_safe(dialog)
+
+        except Exception as ex:
+            logger.error(f"Error showing commands dialog: {ex}", exc_info=True)
+            self._show_error_toast(f"Failed to show commands: {str(ex)}")
     
     def _show_voice_dialog(self, e=None):
         """Show voice assistant dialog"""
@@ -1614,6 +1942,28 @@ class SecureXApp:
         except Exception as ex:
             logger.error(f"Error opening voice dialog: {ex}", exc_info=True)
             self._show_error_toast(f"Failed to open voice assistant: {str(ex)}")
+
+    def _handle_listen_button(self, e, log_content, status_text, start_btn, stop_btn, continuous_toggle):
+        """Handle listen button"""
+        return [
+            ft.Container(height=12),
+            ft.Row([start_btn, stop_btn], spacing=10),
+            ft.Container(height=16),
+            ft.Text(
+                "INTERACTION LOG:",
+                size=12,
+                weight=ft.FontWeight.BOLD,
+                color=SciFiColors.TEXT_PRIMARY,
+            ),
+            ft.Container(
+                content=log_content,
+                height=200,
+                bgcolor=ft.Colors.with_opacity(0.5, SciFiColors.BG_DARK),
+                padding=10,
+                border_radius=6,
+                border=ft.border.all(1, SciFiColors.BORDER)
+            ),
+        ]
 
     def _handle_listen_button(self, e, log_content, status_text, start_btn, stop_btn, continuous_toggle):
         """Handle listen button"""
@@ -2195,7 +2545,16 @@ class SecureXApp:
         async def verify_wrapper():
             await self.verify_voice(user, verify_face=True)
         
+        # Launch verification in background and show the record button immediately
+        # so the user can start recording without waiting for all async init steps.
         self.page.run_task(verify_wrapper)
+        try:
+            # Make sure the UI shows the START RECORDING button promptly
+            self.show_record_button()
+        except Exception:
+            # If anything goes wrong updating UI here, fallback silently and
+            # let the async verify flow call show_record_button when ready.
+            pass
 
     def start_registration(self):
         """Start registration"""
@@ -2592,6 +2951,32 @@ class SecureXApp:
             logger.error("Error during shutdown: %s", exc)
         
         logger.info("Application shutdown complete")
+
+    def _create_quick_stat(self, label: str, value: str, color: str) -> ft.Container:
+        """Create a quick stat display"""
+        return ft.Container(
+            content=ft.Column([
+                ft.Text(
+                    value,
+                    size=16,
+                    weight=ft.FontWeight.BOLD,
+                    color=color,
+                    text_align=ft.TextAlign.CENTER,
+                ),
+                ft.Text(
+                    label.upper(),
+                    size=10,
+                    color=SciFiColors.TEXT_MUTED,
+                    weight=ft.FontWeight.W_600,
+                    text_align=ft.TextAlign.CENTER,
+                ),
+            ], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=ft.padding.all(12),
+            border_radius=8,
+            bgcolor=ft.Colors.with_opacity(0.05, color),
+            border=ft.border.all(1, ft.Colors.with_opacity(0.3, color)),
+            alignment=ft.alignment.center,
+        )
 
 
 def main(page: ft.Page):
