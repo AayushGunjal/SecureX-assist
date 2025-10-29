@@ -106,7 +106,7 @@ class SecureXApp:
         self.face_capture_requested = False
         
         # Authentication flow states
-        self.auth_step = "idle"  # idle, voice_enrolling, voice_verifying, face_enrolling, face_verifying, complete
+        self.auth_step = "idle"
         self.voice_enrollment_complete = False
         self.face_enrollment_complete = False
         self.voice_verification_complete = False
@@ -136,7 +136,7 @@ class SecureXApp:
         face = max(faces, key=lambda f: f.bbox[2]*f.bbox[3])
         current_embedding = np.array(face.embedding)
         logger.info(f"ArcFace verification embedding: {current_embedding[:8]}...")
-        liveness_passed = True  # TODO: integrate anti-spoof or blink detection
+        liveness_passed = True
         best_similarity = 0.0
         for enrolled in enrolled_embeddings:
             enrolled_vec = np.array(enrolled)
@@ -149,11 +149,12 @@ class SecureXApp:
 
     async def enroll_user_face_arcface(self, user: dict):
         """Enroll user face using ArcFace and store embedding in DB"""
-        # Automatic face capture - no button required
         self.update_reg_status("⦿ Automatically capturing face for enrollment (ArcFace)...", SciFiColors.INFO)
-        self.tts.speak("Please look at the camera for automatic face enrollment")
+        try:
+            self.tts.speak("Please look at the camera for automatic face enrollment")
+        except:
+            pass
         
-        # Try multiple captures to get a good face
         max_attempts = 3
         face_enrolled = False
         
@@ -167,19 +168,28 @@ class SecureXApp:
             
             if ret and frame is not None:
                 self.update_reg_status("⟳ Processing face image...", SciFiColors.INFO)
-                self.tts.speak("Processing face image")
+                try:
+                    self.tts.speak("Processing face image")
+                except:
+                    pass
                 embedding = self.enroll_face_arcface(frame)
                 if embedding is not None:
                     self.db.deactivate_old_face_embeddings(user['id'])
                     self.db.store_face_embedding(user['id'], embedding, embedding_type="arcface", quality_score=1.0)
                     self.update_reg_status("✅ Face enrolled successfully (ArcFace)", SciFiColors.SUCCESS)
-                    self.tts.speak("Face enrolled successfully")
+                    try:
+                        self.tts.speak("Face enrolled successfully")
+                    except:
+                        pass
                     face_enrolled = True
                     break
                 else:
                     self.update_reg_status(f"⚠ Face enrollment failed - no face detected (attempt {attempt + 1})", SciFiColors.WARNING)
                     if attempt < max_attempts - 1:
-                        self.tts.speak("No face detected, trying again")
+                        try:
+                            self.tts.speak("No face detected, trying again")
+                        except:
+                            pass
                         await asyncio.sleep(1)
             else:
                 self.update_reg_status(f"⚠ Face capture failed (attempt {attempt + 1})", SciFiColors.WARNING)
@@ -188,7 +198,10 @@ class SecureXApp:
         
         if not face_enrolled:
             self.update_reg_status("⚠ Face enrollment failed after all attempts", SciFiColors.ERROR)
-            self.tts.speak("Face enrollment failed, please try again")
+            try:
+                self.tts.speak("Face enrollment failed, please try again")
+            except:
+                pass
             await asyncio.sleep(1)
 
     def enroll_face_arcface(self, image):
@@ -207,23 +220,23 @@ class SecureXApp:
 
     def run(self):
         """Run the application"""
-        # Setup page first
         self.setup_page()
         
-        # Initialize database
         self.db.connect()
         self.db.initialize_schema()
         
-        # Load voice models
-        self.voice_engine.load_models()
+        try:
+            self.voice_engine.load_models()
+        except Exception as e:
+            logger.error(f"Failed to load voice models: {e}")
+            self._show_error_toast(f"Warning: Voice models failed to load: {str(e)}")
         
-        # Show login view
         self.page.add(self.build_login_view())
         
         try:
             self.tts.speak("SecureX Assist initialized. Ready for authentication.")
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"TTS initialization failed: {e}")
 
     def setup_page(self):
         """Configure page settings"""
@@ -241,7 +254,6 @@ class SecureXApp:
             font_family="Poppins"
         )
         
-        # Load fonts
         self.page.fonts = {
             "Orbitron": "https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&display=swap",
             "Rajdhani": "https://fonts.googleapis.com/css2?family=Rajdhani:wght@300;400;500;600;700&display=swap",
@@ -255,7 +267,6 @@ class SecureXApp:
     def build_login_view(self) -> ft.Container:
         """Build modernized split-layout login view"""
         
-        # Define form fields
         self.username_field = ft.TextField(
             label="USERNAME",
             hint_text="Enter your username",
@@ -298,7 +309,6 @@ class SecureXApp:
             ),
         )
 
-        # Registration fields
         self.reg_username_field = ft.TextField(
             label="USERNAME",
             hint_text="Choose a username",
@@ -386,7 +396,6 @@ class SecureXApp:
             ),
         )
 
-        # Progress indicators
         self.progress_ring = ft.ProgressRing(
             visible=False,
             color=SciFiColors.PRIMARY,
@@ -403,7 +412,6 @@ class SecureXApp:
             stroke_width=4,
         )
         
-        # Recording controls
         self.mic_status = ft.Container(
             content=ft.Row(
                 [
@@ -427,14 +435,17 @@ class SecureXApp:
         self.record_button = ft.ElevatedButton(
             "START RECORDING",
             icon=ft.Icons.MIC,
-            height=48,
-            width=380,
+            height=56,
+            width=400,
             visible=False,
             on_click=lambda _: self.toggle_recording(),
             style=ft.ButtonStyle(
                 bgcolor=SciFiColors.ERROR,
                 color=SciFiColors.TEXT_PRIMARY,
-                shape=ft.RoundedRectangleBorder(radius=8),
+                shape=ft.RoundedRectangleBorder(radius=12),
+                shadow_color=SciFiColors.ERROR,
+                elevation=8,
+                side=ft.BorderSide(width=2, color=SciFiColors.PRIMARY),
             ),
         )
         
@@ -461,18 +472,20 @@ class SecureXApp:
         self.reg_record_button = ft.ElevatedButton(
             "START RECORDING",
             icon=ft.Icons.MIC,
-            height=48,
-            width=380,
+            height=56,
+            width=400,
             visible=False,
             on_click=lambda _: self.toggle_reg_recording(),
             style=ft.ButtonStyle(
                 bgcolor=SciFiColors.ERROR,
                 color=SciFiColors.TEXT_PRIMARY,
-                shape=ft.RoundedRectangleBorder(radius=8),
+                shape=ft.RoundedRectangleBorder(radius=12),
+                shadow_color=SciFiColors.ERROR,
+                elevation=8,
+                side=ft.BorderSide(width=2, color=SciFiColors.PRIMARY),
             ),
         )
         
-        # Status panels
         self.status_text = ft.Text(
             "",
             size=12,
@@ -507,7 +520,6 @@ class SecureXApp:
             border=ft.border.all(1, SciFiColors.INFO),
         )
         
-        # Progress indicators for authentication flow
         self.auth_progress_text = ft.Text(
             "",
             size=11,
@@ -524,7 +536,6 @@ class SecureXApp:
             bgcolor=ft.Colors.with_opacity(0.05, SciFiColors.PRIMARY),
         )
         
-        # Action buttons
         login_button = ft.Container(
             content=ft.ElevatedButton(
                 content=ft.Row(
@@ -578,7 +589,6 @@ class SecureXApp:
             ),
         )
         
-        # Tabs
         self.auth_tabs = ft.Tabs(
             selected_index=0,
             animation_duration=300,
@@ -592,7 +602,6 @@ class SecureXApp:
             on_change=lambda e: self._handle_auth_tab_change(e),
         )
         
-        # Form container
         self.form_container = ft.Column(
             [
                 self.username_field,
@@ -606,14 +615,12 @@ class SecureXApp:
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         )
         
-        # Action button container
         self.action_button_container = ft.Column(
             [login_button, register_button],
             spacing=0,
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         )
         
-        # LEFT SIDE: Branding
         left_side = ft.Container(
             content=ft.Column(
                 [
@@ -694,7 +701,6 @@ class SecureXApp:
             border=ft.border.only(right=ft.border.BorderSide(1, SciFiColors.BORDER_GLOW)),
         )
         
-        # RIGHT SIDE: Forms
         right_side = ft.Container(
             content=ft.Column(
                 [
@@ -703,10 +709,11 @@ class SecureXApp:
                     ft.Container(height=24),
                     self.form_container,
                     ft.Container(height=16),
-                    self.mic_status,
                     self.record_button,
-                    self.reg_mic_status,
                     self.reg_record_button,
+                    ft.Container(height=12),
+                    self.mic_status,
+                    self.reg_mic_status,
                     ft.Container(height=12),
                     self.status_panel,
                     self.reg_status_panel,
@@ -735,7 +742,6 @@ class SecureXApp:
             padding=40,
         )
         
-        # Main card with split layout
         main_card = ft.Container(
             content=ft.Row(
                 [left_side, right_side],
@@ -754,7 +760,6 @@ class SecureXApp:
             ),
         )
         
-        # Background
         bg_gradient = ft.Container(
             expand=True,
             gradient=ft.LinearGradient(
@@ -775,11 +780,105 @@ class SecureXApp:
             expand=True,
         )
 
+    def build_dashboard_view(self) -> ft.Container:
+        """Build dashboard view with navigation and content"""
+        nav_items = [
+            {"name": "dashboard", "icon": ft.Icons.DASHBOARD_ROUNDED, "label": "Dashboard"},
+            {"name": "security", "icon": ft.Icons.SECURITY_ROUNDED, "label": "Security"},
+            {"name": "assistant", "icon": ft.Icons.MIC_ROUNDED, "label": "Assistant"},
+            {"name": "settings", "icon": ft.Icons.SETTINGS_ROUNDED, "label": "System"},
+        ]
+        
+        nav_buttons = []
+        for item in nav_items:
+            nav_buttons.append(
+                ft.Container(
+                    content=ft.ElevatedButton(
+                        content=ft.Row([
+                            ft.Icon(item["icon"], size=20, color=SciFiColors.TEXT_PRIMARY),
+                            ft.Text(item["label"], size=14, weight=ft.FontWeight.W_500),
+                        ], spacing=12),
+                        on_click=lambda e, name=item["name"]: self._navigate_to_section(name),
+                        width=200,
+                        height=48,
+                        style=ft.ButtonStyle(
+                            bgcolor=SciFiColors.BG_ELEVATED if self.current_nav_section == item["name"] else ft.Colors.TRANSPARENT,
+                            color=SciFiColors.TEXT_PRIMARY,
+                            shape=ft.RoundedRectangleBorder(radius=8),
+                        ),
+                    ),
+                    margin=ft.margin.symmetric(vertical=4),
+                )
+            )
+        
+        sidebar = ft.Container(
+            content=ft.Column([
+                ft.Container(
+                    content=ft.Column([
+                        ft.Text("SECUREX", size=24, weight=ft.FontWeight.BOLD, color=SciFiColors.PRIMARY, font_family="Orbitron"),
+                        ft.Text("ASSIST", size=24, weight=ft.FontWeight.BOLD, color=SciFiColors.PRIMARY, font_family="Orbitron"),
+                    ], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                    padding=ft.padding.all(20),
+                ),
+                ft.Divider(color=SciFiColors.BORDER),
+                ft.Container(
+                    content=ft.Column(nav_buttons, spacing=0),
+                    padding=ft.padding.symmetric(vertical=20),
+                ),
+                ft.Container(expand=True),
+                ft.Container(
+                    content=ft.ElevatedButton(
+                        content=ft.Row([
+                            ft.Icon(ft.Icons.LOGOUT_ROUNDED, size=20, color=SciFiColors.ERROR),
+                            ft.Text("Logout", size=14, weight=ft.FontWeight.W_500),
+                        ], spacing=12),
+                        on_click=lambda _: self.logout(),
+                        width=200,
+                        height=48,
+                        style=ft.ButtonStyle(
+                            bgcolor=ft.Colors.TRANSPARENT,
+                            color=SciFiColors.ERROR,
+                            shape=ft.RoundedRectangleBorder(radius=8),
+                        ),
+                    ),
+                    margin=ft.margin.symmetric(vertical=20),
+                ),
+            ], spacing=0),
+            width=240,
+            bgcolor=ft.Colors.with_opacity(0.8, SciFiColors.BG_DARK),
+            border=ft.border.only(right=ft.border.BorderSide(1, SciFiColors.BORDER)),
+        )
+        
+        content_area = ft.Container(
+            content=self._create_main_content(),
+            expand=True,
+            padding=ft.padding.all(30),
+        )
+        
+        bg_gradient = ft.Container(
+            expand=True,
+            gradient=ft.LinearGradient(
+                colors=[SciFiColors.BG_SPACE, "#0a1628", SciFiColors.BG_SPACE],
+                begin=ft.alignment.top_left,
+                end=ft.alignment.bottom_right,
+            ),
+        )
+        
+        return ft.Container(
+            content=ft.Stack([
+                bg_gradient,
+                ft.Row([
+                    sidebar,
+                    content_area,
+                ], spacing=0),
+            ]),
+            expand=True,
+        )
+
     def _handle_auth_tab_change(self, e):
         """Handle tab switching"""
         is_login = e.control.selected_index == 0
         
-        # Toggle field visibility
         self.username_field.visible = is_login
         self.password_field.visible = is_login
         self.reg_username_field.visible = not is_login
@@ -787,220 +886,31 @@ class SecureXApp:
         self.reg_confirm_password_field.visible = not is_login
         self.reg_email_field.visible = not is_login
         
-        # Toggle buttons
         self.action_button_container.controls[0].content.visible = is_login
         self.action_button_container.controls[1].content.visible = not is_login
         
-        # Hide status
         self.status_panel.visible = False
         self.reg_status_panel.visible = False
         self.hide_record_button()
         self.hide_reg_record_button()
         
-        # Reset auth states when switching tabs
         self.reset_auth_states()
         
         self.page.update()
-
-    def _create_sidebar(self) -> ft.Container:
-        """Create left sidebar navigation with icons and text"""
-        nav_items = [
-            {"name": "dashboard", "icon": ft.Icons.DASHBOARD_ROUNDED, "label": "Dashboard"},
-            {"name": "assistant", "icon": ft.Icons.MIC_ROUNDED, "label": "Assistant"},
-            {"name": "security", "icon": ft.Icons.SECURITY_ROUNDED, "label": "Security"},
-            {"name": "logs", "icon": ft.Icons.LIST_ROUNDED, "label": "Logs"},
-            {"name": "settings", "icon": ft.Icons.SETTINGS_ROUNDED, "label": "Settings"},
-        ]
-        nav_buttons = []
-        for item in nav_items:
-            is_active = item["name"] == self.current_nav_section
-            nav_buttons.append(
-                ft.Container(
-                    content=ft.Column([
-                        ft.IconButton(
-                            icon=item["icon"],
-                            icon_size=24,
-                            icon_color=SciFiColors.PRIMARY if is_active else SciFiColors.TEXT_MUTED,
-                            tooltip=item["label"],
-                            on_click=lambda e, name=item["name"]: self._navigate_to_section(name),
-                            style=ft.ButtonStyle(
-                                bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.PRIMARY) if is_active else ft.Colors.TRANSPARENT,
-                                shape=ft.RoundedRectangleBorder(radius=8),
-                            ),
-                        ),
-                        ft.Text(
-                            item["label"],
-                            size=10,
-                            color=SciFiColors.PRIMARY if is_active else SciFiColors.TEXT_MUTED,
-                            weight=ft.FontWeight.W_600,
-                            text_align=ft.TextAlign.CENTER,
-                        ),
-                    ], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-                    padding=ft.padding.symmetric(vertical=12, horizontal=8),
-                )
-            )
-        return ft.Container(
-            content=ft.Column([
-                ft.Container(
-                    content=ft.Column([
-                        ft.Container(
-                            width=40,
-                            height=40,
-                            border_radius=8,
-                            bgcolor=ft.Colors.with_opacity(0.2, SciFiColors.PRIMARY),
-                            alignment=ft.alignment.center,
-                            content=ft.Icon(ft.Icons.SECURITY_ROUNDED, color=SciFiColors.PRIMARY, size=24),
-                        ),
-                        ft.Text(
-                            "SECUREX",
-                            size=10,
-                            color=SciFiColors.TEXT_PRIMARY,
-                            weight=ft.FontWeight.BOLD,
-                            font_family="Orbitron",
-                        ),
-                    ], spacing=8, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-                    padding=ft.padding.symmetric(vertical=20),
-                ),
-                ft.Column(nav_buttons, spacing=8),
-                ft.Container(expand=True),
-                ft.Container(
-                    content=ft.Text(
-                        "v2.0.0",
-                        size=8,
-                        color=SciFiColors.TEXT_MUTED,
-                        text_align=ft.TextAlign.CENTER,
-                    ),
-                    padding=ft.padding.symmetric(vertical=10),
-                ),
-            ], spacing=0),
-            width=80,
-            bgcolor=ft.Colors.with_opacity(0.8, SciFiColors.BG_DARK),
-            border=ft.border.only(right=ft.border.BorderSide(1, SciFiColors.BORDER)),
-        )
-
-    def _create_header(self, username: str) -> ft.Container:
-        """Create slim header bar with logo, name, status indicators, session time, and profile dropdown"""
-        return ft.Container(
-            content=ft.Row([
-                # Logo and title
-                ft.Row([
-                    ft.Icon(ft.Icons.SECURITY_ROUNDED, color=SciFiColors.PRIMARY, size=24),
-                    ft.Container(width=12),
-                    ft.Column([
-                        ft.Text(
-                            "SecureX-Assist",
-                            size=18,
-                            weight=ft.FontWeight.BOLD,
-                            color=SciFiColors.TEXT_PRIMARY,
-                            font_family="Orbitron",
-                        ),
-                        ft.Text(
-                            "Voice Authenticated AI Assistant",
-                            size=10,
-                            color=SciFiColors.TEXT_SECONDARY,
-                        ),
-                    ], spacing=2, tight=True),
-                ], spacing=0),
-                ft.Container(expand=True),
-                # Status indicators
-                ft.Row([
-                    ft.Container(
-                        content=ft.Row([
-                            ft.Icon(ft.Icons.LOCK_ROUNDED, size=14, color=SciFiColors.SUCCESS),
-                            ft.Text("SECURE", size=10, color=SciFiColors.SUCCESS, weight=ft.FontWeight.W_600),
-                        ], spacing=4),
-                        padding=ft.padding.symmetric(horizontal=8, vertical=4),
-                        border_radius=12,
-                        bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.SUCCESS),
-                    ),
-                    ft.Container(width=12),
-                    ft.Container(
-                        content=ft.Row([
-                            ft.Icon(ft.Icons.MIC_ROUNDED, size=14, color=SciFiColors.PRIMARY),
-                            ft.Text("READY", size=10, color=SciFiColors.PRIMARY, weight=ft.FontWeight.W_600),
-                        ], spacing=4),
-                        padding=ft.padding.symmetric(horizontal=8, vertical=4),
-                        border_radius=12,
-                        bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.PRIMARY),
-                    ),
-                    ft.Container(width=12),
-                    ft.Container(
-                        content=ft.Row([
-                            ft.Icon(ft.Icons.COMPUTER_ROUNDED, size=14, color=SciFiColors.SUCCESS),
-                            ft.Text("ONLINE", size=10, color=SciFiColors.SUCCESS, weight=ft.FontWeight.W_600),
-                        ], spacing=4),
-                        padding=ft.padding.symmetric(horizontal=8, vertical=4),
-                        border_radius=12,
-                        bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.SUCCESS),
-                    ),
-                ], spacing=0),
-                ft.Container(width=20),
-                # Session info and profile
-                ft.Row([
-                    ft.Column([
-                        ft.Text(
-                            f"{datetime.datetime.now().strftime('%H:%M:%S')}",
-                            size=12,
-                            color=SciFiColors.TEXT_SECONDARY,
-                            weight=ft.FontWeight.W_600,
-                        ),
-                        ft.Text(
-                            f"Session: {username}",
-                            size=10,
-                            color=SciFiColors.TEXT_MUTED,
-                        ),
-                    ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.END),
-                    ft.Container(width=8),
-                    ft.Container(
-                        content=ft.Text(
-                            username[0].upper(),
-                            size=14,
-                            color=SciFiColors.TEXT_PRIMARY,
-                            weight=ft.FontWeight.BOLD,
-                        ),
-                        width=32,
-                        height=32,
-                        border_radius=16,
-                        bgcolor=ft.Colors.with_opacity(0.2, SciFiColors.PRIMARY),
-                        alignment=ft.alignment.center,
-                        border=ft.border.all(2, SciFiColors.PRIMARY),
-                    ),
-                    ft.Container(width=8),
-                    ft.IconButton(
-                        icon=ft.Icons.LOGOUT_ROUNDED,
-                        icon_color=SciFiColors.ERROR,
-                        icon_size=20,
-                        tooltip="Logout",
-                        on_click=lambda _: self.logout(),
-                    ),
-                ], spacing=0),
-            ], spacing=0, alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            padding=ft.padding.symmetric(horizontal=20, vertical=12),
-            bgcolor=ft.Colors.with_opacity(0.9, SciFiColors.BG_DARK),
-            border=ft.border.only(bottom=ft.border.BorderSide(1, SciFiColors.BORDER)),
-        )
 
     def _create_main_content(self) -> ft.Container:
         """Create main content area based on current navigation section"""
         logger.info(f"Creating main content for section: {self.current_nav_section}")
         try:
             if self.current_nav_section == "dashboard":
-                logger.info("Creating dashboard content")
                 return self._create_dashboard_content()
             elif self.current_nav_section == "assistant":
-                logger.info("Creating assistant content")
                 return self._create_assistant_content()
             elif self.current_nav_section == "security":
-                logger.info("Creating security content")
                 return self._create_security_content()
-            elif self.current_nav_section == "logs":
-                logger.info("Creating logs content")
-                return self._create_logs_content()
             elif self.current_nav_section == "settings":
-                logger.info("Creating settings content")
                 return self._create_settings_content()
             else:
-                logger.warning(f"Unknown section: {self.current_nav_section}, defaulting to dashboard")
                 return self._create_dashboard_content()
         except Exception as e:
             logger.error(f"Error creating main content: {e}", exc_info=True)
@@ -1011,10 +921,16 @@ class SecureXApp:
             )
 
     def _create_dashboard_content(self) -> ft.Container:
-        """Create main dashboard with enhanced three panels: Security, Assistant, System"""
+        """Create main dashboard"""
+        try:
+            cpu_usage = psutil.cpu_percent(interval=0.1)
+            ram_usage = psutil.virtual_memory().percent
+        except:
+            cpu_usage = 45
+            ram_usage = 62
+        
         return ft.Container(
             content=ft.Column([
-                # Welcome header
                 ft.Container(
                     content=ft.Column([
                         ft.Text(
@@ -1047,368 +963,43 @@ class SecureXApp:
                     ], spacing=8, horizontal_alignment=ft.CrossAxisAlignment.START),
                     padding=ft.padding.symmetric(vertical=20, horizontal=20),
                 ),
-
-                # Enhanced three-panel grid with better spacing
                 ft.Container(
                     content=ft.Row([
-                        # Security Panel
-                        ft.Container(
-                            content=self._create_security_panel(),
-                            expand=1,
-                            padding=ft.padding.all(15),
-                            margin=ft.margin.all(5),
-                        ),
-                        # Assistant Panel
-                        ft.Container(
-                            content=self._create_assistant_panel(),
-                            expand=1,
-                            padding=ft.padding.all(15),
-                            margin=ft.margin.all(5),
-                        ),
-                        # System Panel
-                        ft.Container(
-                            content=self._create_system_panel(),
-                            expand=1,
-                            padding=ft.padding.all(15),
-                            margin=ft.margin.all(5),
-                        ),
-                    ], spacing=10, alignment=ft.MainAxisAlignment.START, wrap=True),
-                    height=380,
+                        self._create_stat_card("CPU Usage", f"{int(cpu_usage)}%", SciFiColors.PRIMARY, ft.Icons.MEMORY_ROUNDED),
+                        self._create_stat_card("RAM Usage", f"{int(ram_usage)}%", SciFiColors.ACCENT, ft.Icons.STORAGE_ROUNDED),
+                        self._create_stat_card("Security", "ACTIVE", SciFiColors.SUCCESS, ft.Icons.SECURITY_ROUNDED),
+                        self._create_stat_card("Assistant", "READY", SciFiColors.INFO, ft.Icons.MIC_ROUNDED),
+                    ], spacing=20, wrap=True),
+                    height=200,
                 ),
-
-                # Enhanced actions section with better organization
-                ft.Container(
-                    content=self._create_actions_section(),
-                    padding=ft.padding.symmetric(vertical=25, horizontal=20),
-                    margin=ft.margin.only(top=10),
-                ),
-
-                # Quick stats footer
-                ft.Container(
-                    content=ft.Row([
-                        self._create_quick_stat("Voice Commands", "35+", SciFiColors.PRIMARY),
-                        self._create_quick_stat("Security Level", "Ultra", SciFiColors.SUCCESS),
-                        self._create_quick_stat("Uptime", "Stable", SciFiColors.INFO),
-                        self._create_quick_stat("AI Models", "Active", SciFiColors.ACCENT),
-                    ], spacing=20, alignment=ft.MainAxisAlignment.CENTER),
-                    padding=ft.padding.symmetric(vertical=15),
-                    bgcolor=ft.Colors.with_opacity(0.05, SciFiColors.BG_ELEVATED),
-                    border_radius=10,
-                    margin=ft.margin.symmetric(horizontal=20),
-                ),
-
+                ft.Container(height=20),
+                ft.Text("QUICK ACTIONS", size=18, weight=ft.FontWeight.BOLD, font_family="Orbitron"),
+                ft.Container(height=16),
+                ft.Row([
+                    self._create_action_card("Voice Assistant", ft.Icons.MIC_ROUNDED, SciFiColors.PRIMARY, self._show_voice_dialog),
+                    self._create_action_card("Security Scan", ft.Icons.SECURITY_ROUNDED, SciFiColors.WARNING, lambda e: self._run_security_scan()),
+                    self._create_action_card("System Info", ft.Icons.INFO_ROUNDED, SciFiColors.SUCCESS, self._show_system_status),
+                    self._create_action_card("Screenshot", ft.Icons.CAMERA_ROUNDED, SciFiColors.ACCENT, self._take_screenshot_action),
+                ], spacing=16, wrap=True),
             ], spacing=0, scroll=ft.ScrollMode.AUTO),
             padding=ft.padding.all(0),
             expand=True,
         )
 
-    def _create_security_panel(self) -> ft.Container:
-        """Create security panel with circular verification indicators"""
+    def _create_stat_card(self, title: str, value: str, color: str, icon) -> ft.Container:
         return ft.Container(
             content=ft.Column([
-                # Header
-                ft.Row([
-                    ft.Icon(ft.Icons.SECURITY_ROUNDED, color=SciFiColors.SUCCESS, size=20),
-                    ft.Text("SECURITY STATUS", size=16, weight=ft.FontWeight.BOLD, font_family="Orbitron", color=SciFiColors.TEXT_PRIMARY),
-                ], spacing=8),
-                ft.Container(height=20),
-                # Circular indicators
-                ft.Row([
-                    self._create_circular_indicator("Voice Auth", True, SciFiColors.SUCCESS),
-                    self._create_circular_indicator("Password", True, SciFiColors.SUCCESS),
-                    self._create_circular_indicator("Liveness", True, SciFiColors.SUCCESS),
-                ], spacing=20, alignment=ft.MainAxisAlignment.CENTER),
-                ft.Container(height=20),
-                # Status text
-                ft.Container(
-                    content=ft.Text(
-                        "ALL SYSTEMS VERIFIED",
-                        size=12,
-                        color=SciFiColors.SUCCESS,
-                        weight=ft.FontWeight.W_600,
-                        text_align=ft.TextAlign.CENTER,
-                    ),
-                    alignment=ft.alignment.center,
-                ),
-            ], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-            padding=20,
-            bgcolor=ft.Colors.with_opacity(0.6, SciFiColors.BG_CARD),
-            border=ft.border.all(1, SciFiColors.BORDER_GLOW),
-            border_radius=12,
-            height=280,
-        )
-
-    def _create_circular_indicator(self, label: str, is_active: bool, color: str) -> ft.Container:
-        return ft.Container(
-            content=ft.Column([
-                ft.Stack([
-                    ft.Container(
-                        width=60,
-                        height=60,
-                        border_radius=30,
-                        border=ft.border.all(3, color if is_active else SciFiColors.BORDER),
-                        bgcolor=ft.Colors.with_opacity(0.1, color) if is_active else ft.Colors.TRANSPARENT,
-                    ),
-                    ft.Container(
-                        content=ft.Icon(
-                            ft.Icons.CHECK_ROUNDED if is_active else ft.Icons.CLOSE_ROUNDED,
-                            color=color if is_active else SciFiColors.TEXT_MUTED,
-                            size=24,
-                        ),
-                        width=60,
-                        height=60,
-                        alignment=ft.alignment.center,
-                    ),
-                ]),
+                ft.Icon(icon, size=32, color=color),
                 ft.Container(height=8),
-                ft.Text(
-                    label.upper(),
-                    size=10,
-                    color=color if is_active else SciFiColors.TEXT_MUTED,
-                    weight=ft.FontWeight.W_600,
-                    text_align=ft.TextAlign.CENTER,
-                ),
+                ft.Text(value, size=24, weight=ft.FontWeight.BOLD, color=color),
+                ft.Text(title.upper(), size=10, color=SciFiColors.TEXT_MUTED, weight=ft.FontWeight.W_600),
             ], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-            alignment=ft.alignment.center,
-        )
-
-    def _create_assistant_panel(self) -> ft.Container:
-        """Create enhanced assistant panel with real-time voice activity visualization"""
-        # Get current voice assistant status
-        mic_status = "IDLE"
-        auth_status = "NONE"
-        if hasattr(self.voice_assistant, 'mic_state'):
-            mic_status = self.voice_assistant.mic_state.upper()
-        if hasattr(self.voice_assistant, 'authenticated_session') and self.voice_assistant.authenticated_session:
-            auth_status = "ACTIVE"
-
-        return ft.Container(
-            content=ft.Column([
-                ft.Row([
-                    ft.Icon(ft.Icons.MIC_ROUNDED, color=SciFiColors.PRIMARY, size=20),
-                    ft.Text("VOICE ASSISTANT", size=16, weight=ft.FontWeight.BOLD, font_family="Orbitron"),
-                    ft.Container(expand=True),
-                    ft.Container(
-                        content=ft.Text(
-                            "●" if self.voice_assistant_active else "○",
-                            size=12,
-                            color=SciFiColors.SUCCESS if self.voice_assistant_active else SciFiColors.TEXT_MUTED,
-                        ),
-                        tooltip="Assistant Status",
-                    ),
-                ], spacing=8),
-
-                ft.Container(height=15),
-
-                # Status indicators with real data
-                ft.Column([
-                    ft.Row([
-                        ft.Container(
-                            content=ft.Row([
-                                ft.Icon(ft.Icons.MIC_ROUNDED, color=SciFiColors.PRIMARY, size=14),
-                                ft.Text("MIC", size=10, color=SciFiColors.TEXT_SECONDARY),
-                                ft.Container(width=6),
-                                ft.Text(
-                                    mic_status,
-                                    size=10,
-                                    color=SciFiColors.PRIMARY if mic_status == "LISTENING" else SciFiColors.TEXT_SECONDARY,
-                                    weight=ft.FontWeight.W_600
-                                ),
-                            ], spacing=4),
-                            padding=ft.padding.symmetric(horizontal=10, vertical=6),
-                            border_radius=15,
-                            bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.PRIMARY),
-                        ),
-                        ft.Container(width=8),
-                        ft.Container(
-                            content=ft.Row([
-                                ft.Icon(ft.Icons.SECURITY_ROUNDED, color=SciFiColors.SUCCESS, size=14),
-                                ft.Text("AUTH", size=10, color=SciFiColors.TEXT_SECONDARY),
-                                ft.Container(width=6),
-                                ft.Text(
-                                    auth_status,
-                                    size=10,
-                                    color=SciFiColors.SUCCESS if auth_status == "ACTIVE" else SciFiColors.WARNING,
-                                    weight=ft.FontWeight.W_600
-                                ),
-                            ], spacing=4),
-                            padding=ft.padding.symmetric(horizontal=10, vertical=6),
-                            border_radius=15,
-                            bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.SUCCESS),
-                        ),
-                    ], spacing=0),
-                ], spacing=8),
-
-                ft.Container(height=15),
-
-                # Enhanced voice visualization
-                ft.Container(
-                    content=ft.Column([
-                        # Animated bars when active
-                        ft.Row([
-                            ft.Container(
-                                width=4,
-                                height=20 + (rnd.randint(0, 20) if self.voice_assistant_active else 5),
-                                bgcolor=SciFiColors.PRIMARY,
-                                border_radius=2,
-                                animate=ft.animation.Animation(300, ft.AnimationCurve.EASE_IN_OUT) if self.voice_assistant_active else None,
-                            ),
-                            ft.Container(width=3),
-                            ft.Container(
-                                width=4,
-                                height=15 + (rnd.randint(0, 25) if self.voice_assistant_active else 5),
-                                bgcolor=SciFiColors.ACCENT,
-                                border_radius=2,
-                                animate=ft.animation.Animation(300, ft.AnimationCurve.EASE_IN_OUT) if self.voice_assistant_active else None,
-                            ),
-                            ft.Container(width=3),
-                            ft.Container(
-                                width=4,
-                                height=25 + (rnd.randint(0, 15) if self.voice_assistant_active else 5),
-                                bgcolor=SciFiColors.PRIMARY,
-                                border_radius=2,
-                                animate=ft.animation.Animation(300, ft.AnimationCurve.EASE_IN_OUT) if self.voice_assistant_active else None,
-                            ),
-                            ft.Container(width=3),
-                            ft.Container(
-                                width=4,
-                                height=10 + (rnd.randint(0, 30) if self.voice_assistant_active else 5),
-                                bgcolor=SciFiColors.ACCENT,
-                                border_radius=2,
-                                animate=ft.animation.Animation(300, ft.AnimationCurve.EASE_IN_OUT) if self.voice_assistant_active else None,
-                            ),
-                            ft.Container(width=3),
-                            ft.Container(
-                                width=4,
-                                height=30 + (rnd.randint(0, 10) if self.voice_assistant_active else 5),
-                                bgcolor=SciFiColors.PRIMARY,
-                                border_radius=2,
-                                animate=ft.animation.Animation(300, ft.AnimationCurve.EASE_IN_OUT) if self.voice_assistant_active else None,
-                            ),
-                            ft.Container(width=3),
-                            ft.Container(
-                                width=4,
-                                height=20 + (rnd.randint(0, 20) if self.voice_assistant_active else 5),
-                                bgcolor=SciFiColors.ACCENT,
-                                border_radius=2,
-                                animate=ft.animation.Animation(300, ft.AnimationCurve.EASE_IN_OUT) if self.voice_assistant_active else None,
-                            ),
-                            ft.Container(width=3),
-                            ft.Container(
-                                width=4,
-                                height=15 + (rnd.randint(0, 25) if self.voice_assistant_active else 5),
-                                bgcolor=SciFiColors.PRIMARY,
-                                border_radius=2,
-                                animate=ft.animation.Animation(300, ft.AnimationCurve.EASE_IN_OUT) if self.voice_assistant_active else None,
-                            ),
-                        ], spacing=0, alignment=ft.MainAxisAlignment.CENTER),
-
-                        ft.Container(height=12),
-
-                        ft.Text(
-                            "LISTENING..." if self.voice_assistant_active else "READY FOR COMMANDS",
-                            size=11,
-                            color=SciFiColors.SUCCESS if self.voice_assistant_active else SciFiColors.TEXT_SECONDARY,
-                            weight=ft.FontWeight.W_600,
-                            text_align=ft.TextAlign.CENTER,
-                        ),
-
-                        # Commands count
-                        ft.Container(height=8),
-                        ft.Text(
-                            f"35+ Commands Available",
-                            size=9,
-                            color=SciFiColors.TEXT_MUTED,
-                            text_align=ft.TextAlign.CENTER,
-                        ),
-
-                    ], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-                    height=120,
-                    alignment=ft.alignment.center,
-                ),
-
-            ], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-            padding=20,
-            bgcolor=ft.Colors.with_opacity(0.6, SciFiColors.BG_CARD),
-            border=ft.border.all(1, SciFiColors.BORDER_GLOW),
+            width=200,
+            height=150,
+            padding=ft.padding.all(20),
             border_radius=12,
-            height=280,
-        )
-
-    def _create_system_panel(self) -> ft.Container:
-        """Create system panel with stats and mini charts"""
-        try:
-            cpu_usage = psutil.cpu_percent(interval=0.1)
-            ram_usage = psutil.virtual_memory().percent
-            uptime_seconds = int(time.time() - psutil.boot_time())
-            uptime = str(datetime.timedelta(seconds=uptime_seconds))
-        except:
-            cpu_usage = 45
-            ram_usage = 62
-            uptime = "2h 34m"
-        
-        return ft.Container(
-            content=ft.Column([
-                ft.Row([
-                    ft.Icon(ft.Icons.COMPUTER_ROUNDED, color=SciFiColors.SUCCESS, size=20),
-                    ft.Text("SYSTEM STATUS", size=16, weight=ft.FontWeight.BOLD, font_family="Orbitron"),
-                ], spacing=8),
-                ft.Container(height=20),
-                ft.Column([
-                    self._create_stat_bar("CPU", int(cpu_usage), SciFiColors.PRIMARY),
-                    ft.Container(height=12),
-                    self._create_stat_bar("RAM", int(ram_usage), SciFiColors.ACCENT),
-                    ft.Container(height=16),
-                    ft.Row([
-                        ft.Text("Uptime:", size=12, color=SciFiColors.TEXT_SECONDARY),
-                        ft.Container(expand=True),
-                        ft.Text(uptime, size=12, color=SciFiColors.TEXT_PRIMARY, weight=ft.FontWeight.W_600),
-                    ]),
-                ], spacing=0),
-            ], spacing=0),
-            padding=20,
             bgcolor=ft.Colors.with_opacity(0.6, SciFiColors.BG_CARD),
-            border=ft.border.all(1, SciFiColors.BORDER_GLOW),
-            border_radius=12,
-            height=280,
-        )
-
-    def _create_stat_bar(self, label: str, percentage: int, color: str) -> ft.Container:
-        return ft.Column([
-            ft.Row([
-                ft.Text(label, size=12, color=SciFiColors.TEXT_SECONDARY),
-                ft.Container(expand=True),
-                ft.Text(f"{percentage}%", size=12, color=color, weight=ft.FontWeight.W_600),
-            ]),
-            ft.Container(height=4),
-            ft.Container(
-                content=ft.Container(
-                    width=(percentage / 100) * 200,
-                    height=6,
-                    bgcolor=color,
-                    border_radius=3,
-                ),
-                width=200,
-                height=6,
-                bgcolor=ft.Colors.with_opacity(0.2, SciFiColors.BORDER),
-                border_radius=3,
-            ),
-        ], spacing=0)
-
-    def _create_actions_section(self) -> ft.Container:
-        """Create actions section with action cards"""
-        return ft.Container(
-            content=ft.Column([
-                ft.Text("QUICK ACTIONS", size=18, weight=ft.FontWeight.BOLD, font_family="Orbitron"),
-                ft.Container(height=16),
-                ft.Row([
-                    self._create_action_card("Security Scan", ft.Icons.SECURITY_ROUNDED, SciFiColors.WARNING, lambda e: self._run_security_scan()),
-                    self._create_action_card("Take Screenshot", ft.Icons.CAMERA_ROUNDED, SciFiColors.ACCENT, self._take_screenshot_action),
-                    self._create_action_card("System Info", ft.Icons.INFO_ROUNDED, SciFiColors.SUCCESS, self._show_system_status),
-                    self._create_action_card("Voice Commands", ft.Icons.MIC_ROUNDED, SciFiColors.PRIMARY, self._show_voice_dialog),
-                ], spacing=16, wrap=True),
-            ], spacing=0),
-            padding=20,
+            border=ft.border.all(1, color),
         )
 
     def _create_action_card(self, title: str, icon, color: str, on_click) -> ft.Container:
@@ -1443,116 +1034,21 @@ class SecureXApp:
         )
 
     def _create_assistant_content(self) -> ft.Container:
-        """Create voice assistant interface with controls and status"""
+        """Create voice assistant interface"""
         return ft.Container(
             content=ft.Column([
                 ft.Text("VOICE ASSISTANT", size=24, weight=ft.FontWeight.BOLD, font_family="Orbitron"),
-                ft.Container(height=20),
-
-                # Status indicators
-                ft.Row([
-                    ft.Container(
-                        content=ft.Row([
-                            ft.Icon(ft.Icons.MIC_ROUNDED, color=SciFiColors.PRIMARY, size=16),
-                            ft.Text("VOICE", size=12, color=SciFiColors.TEXT_SECONDARY),
-                            ft.Container(width=8),
-                            ft.Text(
-                                self.voice_assistant.mic_state.upper() if hasattr(self.voice_assistant, 'mic_state') else "IDLE",
-                                size=12,
-                                color=SciFiColors.PRIMARY if (hasattr(self.voice_assistant, 'mic_state') and self.voice_assistant.mic_state == "listening") else SciFiColors.TEXT_SECONDARY,
-                                weight=ft.FontWeight.W_600
-                            ),
-                        ], spacing=6),
-                        padding=ft.padding.symmetric(horizontal=12, vertical=6),
-                        border_radius=20,
-                        bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.PRIMARY),
+                ft.Container(height=40),
+                ft.ElevatedButton(
+                    "🎤 START VOICE ASSISTANT",
+                    icon=ft.Icons.MIC_ROUNDED,
+                    on_click=self._show_voice_dialog,
+                    style=ft.ButtonStyle(
+                        bgcolor=SciFiColors.PRIMARY,
+                        color=SciFiColors.BG_DARK,
                     ),
-                    ft.Container(width=12),
-                    ft.Container(
-                        content=ft.Row([
-                            ft.Icon(ft.Icons.VERIFIED_USER_ROUNDED, color=SciFiColors.SUCCESS, size=16),
-                            ft.Text("AUTH", size=12, color=SciFiColors.TEXT_SECONDARY),
-                            ft.Container(width=8),
-                            ft.Text(
-                                "ACTIVE" if (hasattr(self.voice_assistant, 'authenticated_session') and self.voice_assistant.authenticated_session) else "NONE",
-                                size=12,
-                                color=SciFiColors.SUCCESS if (hasattr(self.voice_assistant, 'authenticated_session') and self.voice_assistant.authenticated_session) else SciFiColors.WARNING,
-                                weight=ft.FontWeight.W_600
-                            ),
-                        ], spacing=6),
-                        padding=ft.padding.symmetric(horizontal=12, vertical=6),
-                        border_radius=20,
-                        bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.SUCCESS),
-                    ),
-                ], spacing=0),
-
-                ft.Container(height=20),
-
-                # Voice visualization (animated when active)
-                ft.Container(
-                    content=ft.Column([
-                        ft.Row([
-                            ft.Container(width=4, height=20, bgcolor=SciFiColors.PRIMARY, border_radius=2),
-                            ft.Container(width=4, height=15, bgcolor=SciFiColors.ACCENT, border_radius=2),
-                            ft.Container(width=4, height=25, bgcolor=SciFiColors.PRIMARY, border_radius=2),
-                            ft.Container(width=4, height=10, bgcolor=SciFiColors.ACCENT, border_radius=2),
-                            ft.Container(width=4, height=30, bgcolor=SciFiColors.PRIMARY, border_radius=2),
-                            ft.Container(width=4, height=20, bgcolor=SciFiColors.ACCENT, border_radius=2),
-                            ft.Container(width=4, height=15, bgcolor=SciFiColors.PRIMARY, border_radius=2),
-                        ], spacing=6, alignment=ft.MainAxisAlignment.CENTER),
-                        ft.Container(height=16),
-                        ft.Text(
-                            "READY FOR COMMANDS" if not self.voice_assistant_active else "LISTENING...",
-                            size=12,
-                            color=SciFiColors.TEXT_SECONDARY,
-                            weight=ft.FontWeight.W_600,
-                        ),
-                    ], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-                    height=120,
-                    alignment=ft.alignment.center,
                 ),
-
-                ft.Container(height=20),
-
-                # Control buttons
-                ft.Row([
-                    ft.ElevatedButton(
-                        "🎤 START VOICE ASSISTANT",
-                        icon=ft.Icons.MIC_ROUNDED,
-                        on_click=self._show_voice_dialog,
-                        style=ft.ButtonStyle(
-                            bgcolor=SciFiColors.PRIMARY,
-                            color=SciFiColors.BG_DARK,
-                        ),
-                        disabled=self.voice_assistant_active,
-                    ),
-                    ft.Container(width=12),
-                    ft.OutlinedButton(
-                        "📋 VIEW COMMANDS",
-                        icon=ft.Icons.LIST_ROUNDED,
-                        on_click=self._show_commands_dialog,
-                        style=ft.ButtonStyle(
-                            color=SciFiColors.TEXT_SECONDARY,
-                            side=ft.BorderSide(1, SciFiColors.BORDER),
-                        ),
-                    ),
-                ], spacing=0, alignment=ft.MainAxisAlignment.CENTER),
-
-                ft.Container(height=16),
-
-                # Recent commands
-                ft.Container(
-                    content=ft.Column([
-                        ft.Text("RECENT ACTIVITY", size=14, weight=ft.FontWeight.BOLD, color=SciFiColors.TEXT_SECONDARY),
-                        ft.Container(height=8),
-                        ft.Text("No recent commands", size=12, color=SciFiColors.TEXT_MUTED, italic=True),
-                    ], spacing=0),
-                    padding=16,
-                    border_radius=8,
-                    bgcolor=ft.Colors.with_opacity(0.3, SciFiColors.BG_ELEVATED),
-                ),
-
-            ], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             padding=40,
             alignment=ft.alignment.center,
         )
@@ -1562,21 +1058,9 @@ class SecureXApp:
             content=ft.Column([
                 ft.Text("SECURITY CENTER", size=24, weight=ft.FontWeight.BOLD, font_family="Orbitron"),
                 ft.Container(height=20),
-                ft.Text("Security settings and logs will appear here.", color=SciFiColors.TEXT_SECONDARY, size=14),
+                ft.Text("Security settings and logs.", color=SciFiColors.TEXT_SECONDARY, size=14),
             ]),
             padding=40,
-            alignment=ft.alignment.center,
-        )
-
-    def _create_logs_content(self) -> ft.Container:
-        return ft.Container(
-            content=ft.Column([
-                ft.Text("ACTIVITY LOGS", size=24, weight=ft.FontWeight.BOLD, font_family="Orbitron"),
-                ft.Container(height=20),
-                ft.Text("System logs will appear here.", color=SciFiColors.TEXT_SECONDARY, size=14),
-            ]),
-            padding=40,
-            alignment=ft.alignment.center,
         )
 
     def _create_settings_content(self) -> ft.Container:
@@ -1584,205 +1068,17 @@ class SecureXApp:
             content=ft.Column([
                 ft.Text("SETTINGS", size=24, weight=ft.FontWeight.BOLD, font_family="Orbitron"),
                 ft.Container(height=20),
-                ft.Text("Application settings will appear here.", color=SciFiColors.TEXT_SECONDARY, size=14),
+                ft.Text("Application settings.", color=SciFiColors.TEXT_SECONDARY, size=14),
             ]),
             padding=40,
-            alignment=ft.alignment.center,
-        )
-
-    def _create_voice_dock(self) -> ft.Container:
-        """Create enhanced voice dock with real-time status and controls"""
-        # Get current status
-        mic_status = "IDLE"
-        auth_status = "NONE"
-        last_command = "Ready for voice commands..."
-
-        if hasattr(self.voice_assistant, 'mic_state'):
-            mic_status = self.voice_assistant.mic_state.upper()
-        if hasattr(self.voice_assistant, 'authenticated_session') and self.voice_assistant.authenticated_session:
-            auth_status = "ACTIVE"
-
-        return ft.Container(
-            content=ft.Row([
-                # Voice assistant button with status
-                ft.Container(
-                    content=ft.Row([
-                        ft.Container(
-                            content=ft.IconButton(
-                                icon=ft.Icons.MIC_ROUNDED,
-                                icon_size=28,
-                                icon_color=SciFiColors.TEXT_PRIMARY if not self.voice_assistant_active else SciFiColors.SUCCESS,
-                                on_click=self._show_voice_dialog,
-                                style=ft.ButtonStyle(
-                                    bgcolor=ft.Colors.with_opacity(
-                                        0.3 if self.voice_assistant_active else 0.2,
-                                        SciFiColors.SUCCESS if self.voice_assistant_active else SciFiColors.PRIMARY
-                                    ),
-                                    shape=ft.CircleBorder(),
-                                ),
-                            ),
-                            width=60,
-                            height=60,
-                            border_radius=30,
-                            border=ft.border.all(2, SciFiColors.SUCCESS if self.voice_assistant_active else SciFiColors.PRIMARY),
-                            alignment=ft.alignment.center,
-                        ),
-                        ft.Container(width=16),
-                        ft.Column([
-                            ft.Text(
-                                "VOICE ASSISTANT",
-                                size=10,
-                                color=SciFiColors.TEXT_SECONDARY,
-                                weight=ft.FontWeight.W_600,
-                            ),
-                            ft.Row([
-                                ft.Container(
-                                    width=6,
-                                    height=6,
-                                    border_radius=3,
-                                    bgcolor=SciFiColors.SUCCESS if self.voice_assistant_active else SciFiColors.TEXT_MUTED,
-                                ),
-                                ft.Container(width=4),
-                                ft.Text(
-                                    "Active" if self.voice_assistant_active else "Ready",
-                                    size=9,
-                                    color=SciFiColors.SUCCESS if self.voice_assistant_active else SciFiColors.TEXT_MUTED,
-                                ),
-                            ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                        ], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.START),
-                    ], spacing=0, alignment=ft.MainAxisAlignment.START),
-                    padding=ft.padding.symmetric(horizontal=20, vertical=10),
-                ),
-
-                ft.Container(expand=True),
-
-                # Status indicators
-                ft.Container(
-                    content=ft.Row([
-                        # Mic status
-                        ft.Container(
-                            content=ft.Row([
-                                ft.Icon(
-                                    ft.Icons.MIC_ROUNDED,
-                                    size=12,
-                                    color=SciFiColors.PRIMARY if mic_status == "LISTENING" else SciFiColors.TEXT_MUTED
-                                ),
-                                ft.Text(
-                                    mic_status,
-                                    size=9,
-                                    color=SciFiColors.PRIMARY if mic_status == "LISTENING" else SciFiColors.TEXT_MUTED,
-                                    weight=ft.FontWeight.W_600,
-                                ),
-                            ], spacing=4),
-                            padding=ft.padding.symmetric(horizontal=8, vertical=4),
-                            border_radius=12,
-                            bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.PRIMARY),
-                        ),
-
-                        ft.Container(width=8),
-
-                        # Auth status
-                        ft.Container(
-                            content=ft.Row([
-                                ft.Icon(
-                                    ft.Icons.SECURITY_ROUNDED,
-                                    size=12,
-                                    color=SciFiColors.SUCCESS if auth_status == "ACTIVE" else SciFiColors.WARNING
-                                ),
-                                ft.Text(
-                                    auth_status,
-                                    size=9,
-                                    color=SciFiColors.SUCCESS if auth_status == "ACTIVE" else SciFiColors.WARNING,
-                                    weight=ft.FontWeight.W_600,
-                                ),
-                            ], spacing=4),
-                            padding=ft.padding.symmetric(horizontal=8, vertical=4),
-                            border_radius=12,
-                            bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.SUCCESS if auth_status == "ACTIVE" else SciFiColors.WARNING),
-                        ),
-
-                    ], spacing=0),
-                    padding=ft.padding.symmetric(horizontal=16, vertical=8),
-                ),
-
-                ft.Container(expand=True),
-
-                # Transcript area
-                ft.Container(
-                    content=ft.Column([
-                        ft.Text(
-                            "VOICE TRANSCRIPT",
-                            size=10,
-                            color=SciFiColors.TEXT_MUTED,
-                            weight=ft.FontWeight.W_600,
-                        ),
-                        ft.Container(
-                            content=ft.Text(
-                                last_command,
-                                size=11,
-                                color=SciFiColors.TEXT_SECONDARY,
-                                max_lines=2,
-                                overflow=ft.TextOverflow.ELLIPSIS,
-                            ),
-                            height=35,
-                            alignment=ft.alignment.center_left,
-                        ),
-                    ], spacing=4),
-                    width=280,
-                    padding=ft.padding.symmetric(horizontal=16, vertical=8),
-                    border_radius=8,
-                    bgcolor=ft.Colors.with_opacity(0.3, SciFiColors.BG_DARK),
-                    border=ft.border.all(1, SciFiColors.BORDER),
-                ),
-
-                # Quick actions
-                ft.Container(
-                    content=ft.Row([
-                        ft.IconButton(
-                            icon=ft.Icons.LIST_ROUNDED,
-                            icon_size=20,
-                            icon_color=SciFiColors.TEXT_SECONDARY,
-                            tooltip="View Commands",
-                            on_click=self._show_commands_dialog,
-                            style=ft.ButtonStyle(
-                                bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.BORDER),
-                                shape=ft.CircleBorder(),
-                            ),
-                        ),
-                        ft.Container(width=4),
-                        ft.IconButton(
-                            icon=ft.Icons.SETTINGS_ROUNDED,
-                            icon_size=20,
-                            icon_color=SciFiColors.TEXT_SECONDARY,
-                            tooltip="Voice Settings",
-                            on_click=lambda e: self._show_modern_dialog(
-                                "VOICE SETTINGS",
-                                ft.Text("Voice settings will be available here.", color=SciFiColors.TEXT_SECONDARY),
-                                SciFiColors.PRIMARY,
-                                ft.Icons.SETTINGS_ROUNDED
-                            ),
-                            style=ft.ButtonStyle(
-                                bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.BORDER),
-                                shape=ft.CircleBorder(),
-                            ),
-                        ),
-                    ], spacing=0),
-                    padding=ft.padding.symmetric(horizontal=12, vertical=8),
-                ),
-
-            ], spacing=0, alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            height=80,
-            bgcolor=ft.Colors.with_opacity(0.9, SciFiColors.BG_ELEVATED),
-            border=ft.border.only(top=ft.border.BorderSide(1, SciFiColors.BORDER)),
         )
 
     def _navigate_to_section(self, section_name: str):
-        """Navigate to a different dashboard section and refresh view"""
+        """Navigate to a different dashboard section"""
         try:
             logger.info(f"Navigating to section: {section_name}")
             self.current_nav_section = section_name
             
-            # Rebuild dashboard
             if self.current_view == "dashboard":
                 self.show_dashboard()
             
@@ -1791,39 +1087,6 @@ class SecureXApp:
             self._show_error_toast(f"Navigation failed: {str(e)}")
 
     # ==================== VOICE ASSISTANT DIALOG ====================
-    
-    def _show_commands_dialog(self, e):
-        """Show available voice commands dialog"""
-        try:
-            commands_text = self.voice_assistant.get_available_commands()
-
-            dialog = ft.AlertDialog(
-                modal=True,
-                title=ft.Row([
-                    ft.Icon(ft.Icons.LIST_ROUNDED, color=SciFiColors.PRIMARY, size=28),
-                    ft.Text("AVAILABLE COMMANDS", size=18, weight=ft.FontWeight.BOLD, font_family="Orbitron"),
-                ], spacing=12),
-                content=ft.Container(
-                    content=ft.Text(commands_text, size=12, color=SciFiColors.TEXT_PRIMARY),
-                    height=300,
-                    width=400,
-                ),
-                actions=[
-                    ft.TextButton(
-                        "CLOSE",
-                        on_click=lambda _: self.page.dialog.close(),
-                        style=ft.ButtonStyle(color=SciFiColors.TEXT_SECONDARY),
-                    ),
-                ],
-                bgcolor=SciFiColors.BG_CARD,
-                shape=ft.RoundedRectangleBorder(radius=10),
-            )
-
-            self._open_dialog_safe(dialog)
-
-        except Exception as ex:
-            logger.error(f"Error showing commands dialog: {ex}", exc_info=True)
-            self._show_error_toast(f"Failed to show commands: {str(ex)}")
     
     def _show_voice_dialog(self, e=None):
         """Show voice assistant dialog"""
@@ -1834,7 +1097,6 @@ class SecureXApp:
             
             logger.info("Opening voice assistant dialog")
             
-            # Create dialog components
             log_content = ft.Column(
                 scroll=ft.ScrollMode.AUTO,
                 auto_scroll=True,
@@ -1856,7 +1118,6 @@ class SecureXApp:
                 on_change=lambda e: setattr(self, 'continuous_mode_active', e.control.value)
             )
             
-            # Create buttons
             stop_btn = ft.ElevatedButton(
                 "STOP",
                 icon=ft.Icons.STOP,
@@ -1887,7 +1148,6 @@ class SecureXApp:
                 log_content, status_text, start_btn, stop_btn
             )
             
-            # Build dialog content
             dialog_content = ft.Column([
                 continuous_toggle,
                 ft.Container(height=10),
@@ -1911,7 +1171,6 @@ class SecureXApp:
                 ),
             ], width=500, spacing=0)
             
-            # Create dialog
             dialog = ft.AlertDialog(
                 modal=True,
                 title=ft.Row([
@@ -1930,11 +1189,9 @@ class SecureXApp:
                 shape=ft.RoundedRectangleBorder(radius=10),
             )
             
-            # Open dialog
             self._open_dialog_safe(dialog)
             self.voice_assistant_dialog_open = True
             
-            # Add initial log entry
             self._add_log_entry_to_container(log_content, "Voice Assistant initialized", SciFiColors.SUCCESS)
             
             logger.info("Voice assistant dialog opened successfully")
@@ -1942,28 +1199,6 @@ class SecureXApp:
         except Exception as ex:
             logger.error(f"Error opening voice dialog: {ex}", exc_info=True)
             self._show_error_toast(f"Failed to open voice assistant: {str(ex)}")
-
-    def _handle_listen_button(self, e, log_content, status_text, start_btn, stop_btn, continuous_toggle):
-        """Handle listen button"""
-        return [
-            ft.Container(height=12),
-            ft.Row([start_btn, stop_btn], spacing=10),
-            ft.Container(height=16),
-            ft.Text(
-                "INTERACTION LOG:",
-                size=12,
-                weight=ft.FontWeight.BOLD,
-                color=SciFiColors.TEXT_PRIMARY,
-            ),
-            ft.Container(
-                content=log_content,
-                height=200,
-                bgcolor=ft.Colors.with_opacity(0.5, SciFiColors.BG_DARK),
-                padding=10,
-                border_radius=6,
-                border=ft.border.all(1, SciFiColors.BORDER)
-            ),
-        ]
 
     def _handle_listen_button(self, e, log_content, status_text, start_btn, stop_btn, continuous_toggle):
         """Handle listen button"""
@@ -2055,7 +1290,6 @@ class SecureXApp:
             status_text.color = SciFiColors.PRIMARY
             self.page.update()
             
-            # Run recording in background thread
             def record_and_process():
                 try:
                     audio_path = self.temp_dir / f"command_{int(time.time())}.wav"
@@ -2084,7 +1318,6 @@ class SecureXApp:
                     logger.error(f"Error in recording thread: {e}")
                     self.page.run_task(lambda: update_ui_exception(e))
             
-            # Start recording in background thread
             recording_thread = threading.Thread(target=record_and_process, daemon=True)
             recording_thread.start()
             
@@ -2133,7 +1366,6 @@ class SecureXApp:
         """Close voice assistant dialog"""
         self._close_dialog_safe(dialog)
         self.voice_assistant_dialog_open = False
-        # Stop any ongoing voice assistant activity
         if self.voice_assistant_active:
             self.voice_assistant.stop_continuous_listening()
             self.voice_assistant_active = False
@@ -2306,10 +1538,12 @@ class SecureXApp:
         self.page.update()
 
     def toggle_recording(self, mode="voice"):
-        """Toggle recording for login with mode-specific messages"""
+        """Toggle recording for login"""
+        logger.info(f"Toggle recording called, current state: {self.recording_active}, mode: {mode}")
         self.recording_active = not self.recording_active
         
         if self.recording_active:
+            logger.info("Recording STARTED")
             self.record_button.text = "◉ STOP RECORDING"
             self.record_button.icon = ft.Icons.STOP
             self.record_button.style = ft.ButtonStyle(
@@ -2322,6 +1556,7 @@ class SecureXApp:
             elif mode == "face":
                 self.update_status("⦿ Capturing face... Please look at the camera", SciFiColors.INFO)
         else:
+            logger.info("Recording STOPPED")
             if mode == "voice":
                 self.record_button.text = "START RECORDING"
                 self.record_button.icon = ft.Icons.MIC
@@ -2344,10 +1579,12 @@ class SecureXApp:
         self.page.update()
 
     def toggle_reg_recording(self, mode="voice"):
-        """Toggle recording for registration with mode-specific messages"""
+        """Toggle recording for registration"""
+        logger.info(f"Toggle reg recording called, current state: {self.reg_recording_active}, mode: {mode}")
         self.reg_recording_active = not self.reg_recording_active
         
         if self.reg_recording_active:
+            logger.info("Registration recording STARTED")
             self.reg_record_button.text = "◉ STOP RECORDING"
             self.reg_record_button.icon = ft.Icons.STOP
             self.reg_record_button.style = ft.ButtonStyle(
@@ -2360,6 +1597,7 @@ class SecureXApp:
             elif mode == "face":
                 self.update_reg_status("⦿ Capturing face... Please look at the camera", SciFiColors.INFO)
         else:
+            logger.info("Registration recording STOPPED")
             if mode == "voice":
                 self.reg_record_button.text = "START RECORDING"
                 self.reg_record_button.icon = ft.Icons.MIC
@@ -2382,7 +1620,7 @@ class SecureXApp:
         self.page.update()
 
     def show_record_button(self, mode="voice"):
-        """Show recording button with appropriate icon and tooltip for mode"""
+        """Show recording button"""
         self.mic_status.visible = True
         
         if mode == "voice":
@@ -2412,7 +1650,7 @@ class SecureXApp:
         self.page.update()
 
     def show_reg_record_button(self, sample_info: str = "", on_click=None, mode="voice"):
-        """Show registration recording button with appropriate icon and tooltip for mode"""
+        """Show registration recording button"""
         self.reg_mic_status.visible = True
         
         if mode == "voice":
@@ -2483,78 +1721,67 @@ class SecureXApp:
         self.update_auth_progress("idle")
 
     def cleanup_old_temp_files(self):
-        """Clean up old temporary audio files to prevent disk space issues"""
+        """Clean up old temporary audio files"""
         try:
             cleanup_temp_files(str(self.temp_dir))
         except Exception as e:
             logger.warning(f"Failed to cleanup temp files: {e}")
 
-    def wait_for_recording_start(self):
-        """Wait for recording start"""
-        while not self.recording_active:
-            time.sleep(0.1)
-
-    def wait_for_recording_stop(self):
-        """Wait for recording stop"""
-        while self.recording_active:
-            time.sleep(0.1)
-
-    def wait_for_reg_recording_start(self):
-        """Wait for reg recording start"""
-        while not self.reg_recording_active:
-            time.sleep(0.1)
-
-    def wait_for_reg_recording_stop(self):
-        """Wait for reg recording stop"""
-        while self.reg_recording_active:
-            time.sleep(0.1)
-
-    def wait_for_face_capture(self):
-        """Wait for face capture button click"""
-        while not self.face_capture_requested:
-            time.sleep(0.1)
-
     # ==================== AUTHENTICATION ====================
     
     def start_voice_login(self):
         """Start voice authentication"""
-        username = self.username_field.value
-        password = self.password_field.value
-        
-        if not username or not password:
-            self.update_status("⚠ Enter username and password", SciFiColors.ERROR)
-            return
-        
-        user = self.db.get_user_by_username(username)
-        if not user:
-            self.update_status("⚠ User not found", SciFiColors.ERROR)
-            return
-        
-        if not self.security_manager.verify_hashed_password(password, user['password_hash']):
-            self.update_status("⚠ Invalid password", SciFiColors.ERROR)
-            return
-        
-        # Reset and initialize auth states
-        self.reset_auth_states()
-        self.auth_step = "voice_verifying"
-        self.update_auth_progress("voice_verifying")
-        
-        self.update_status("⟳ Initializing voice auth...", SciFiColors.INFO)
-        self.show_progress(True)
-        
-        async def verify_wrapper():
-            await self.verify_voice(user, verify_face=True)
-        
-        # Launch verification in background and show the record button immediately
-        # so the user can start recording without waiting for all async init steps.
-        self.page.run_task(verify_wrapper)
         try:
-            # Make sure the UI shows the START RECORDING button promptly
-            self.show_record_button()
-        except Exception:
-            # If anything goes wrong updating UI here, fallback silently and
-            # let the async verify flow call show_record_button when ready.
-            pass
+            logger.info("=== VOICE LOGIN STARTED ===")
+            username = self.username_field.value
+            password = self.password_field.value
+            
+            if not username or not password:
+                self.update_status("⚠ Enter username and password", SciFiColors.ERROR)
+                return
+            
+            logger.info(f"Attempting login for user: {username}")
+            user = self.db.get_user_by_username(username)
+            if not user:
+                self.update_status("⚠ User not found", SciFiColors.ERROR)
+                logger.warning(f"User not found: {username}")
+                return
+            
+            logger.info(f"User found: {user['id']}")
+            
+            if not self.security_manager.verify_hashed_password(password, user['password_hash']):
+                self.update_status("⚠ Invalid password", SciFiColors.ERROR)
+                logger.warning("Password verification failed")
+                return
+            
+            logger.info("Password verified successfully")
+            
+            self.reset_auth_states()
+            self.auth_step = "voice_verifying"
+            self.update_auth_progress("voice_verifying")
+            
+            self.update_status("⟳ Initializing voice auth...", SciFiColors.INFO)
+            self.show_progress(True)
+            self.page.update()
+            
+            logger.info("Launching voice verification task")
+            
+            async def verify_wrapper():
+                try:
+                    logger.info("Voice verification wrapper started")
+                    await self.verify_voice(user, verify_face=True)
+                    logger.info("Voice verification wrapper completed")
+                except Exception as e:
+                    logger.error(f"Error in verify_wrapper: {e}", exc_info=True)
+                    self.update_status(f"⚠ Verification error: {str(e)}", SciFiColors.ERROR)
+                    self.show_progress(False)
+            
+            self.page.run_task(verify_wrapper)
+            
+        except Exception as e:
+            logger.error(f"Error in start_voice_login: {e}", exc_info=True)
+            self.update_status(f"⚠ Login error: {str(e)}", SciFiColors.ERROR)
+            self.show_progress(False)
 
     def start_registration(self):
         """Start registration"""
@@ -2563,7 +1790,6 @@ class SecureXApp:
     async def process_registration(self):
         """Process registration"""
         try:
-            # Initialize auth states for registration
             self.reset_auth_states()
             self.auth_step = "voice_enrolling"
             self.update_auth_progress("voice_enrolling")
@@ -2623,13 +1849,11 @@ class SecureXApp:
                 self.update_reg_status(f"⚠ Face enrollment failed: {str(e)}", SciFiColors.ERROR)
                 await asyncio.sleep(2)
             
-            # Registration complete - switch to login
             self.auth_tabs.selected_index = 0
             self._handle_auth_tab_change(type('obj', (object,), {'control': self.auth_tabs})())
             self.update_status("✓ Registration complete! Please login.", SciFiColors.SUCCESS)
             self.show_reg_progress(False)
             
-            # Clean up temp files after registration
             self.cleanup_old_temp_files()
             
         except Exception as e:
@@ -2640,77 +1864,135 @@ class SecureXApp:
     async def verify_voice(self, user: dict, verify_face=False, face_image=None):
         """Verify voice biometric using ultimate engine with AASIST anti-spoofing"""
         try:
+            logger.info("Starting voice verification")
+            
+            self.show_progress(False)
             self.update_status("⦿ Click START RECORDING for secure voice verification", SciFiColors.INFO)
-            self.tts.speak("Please speak for secure voice verification with anti-spoofing")
-            self.show_record_button()
-
-            await asyncio.get_event_loop().run_in_executor(None, self.wait_for_recording_start)
+            self.show_record_button(mode="voice")
+            self.page.update()
+            
+            try:
+                self.tts.speak("Please speak for secure voice verification with anti-spoofing")
+            except Exception as e:
+                logger.warning(f"TTS failed: {e}")
+            
+            logger.info("Waiting for recording to start...")
+            while not self.recording_active:
+                await asyncio.sleep(0.1)
+            
+            logger.info("Recording started by user")
 
             recording_complete = threading.Event()
             audio_data = [None]
+            recording_error = [None]
 
             def record_thread():
-                audio_data[0] = self.audio_recorder.record_audio(duration=5.0)
-                recording_complete.set()
+                try:
+                    logger.info("Recording thread started")
+                    audio_data[0] = self.audio_recorder.record_audio(duration=5.0)
+                    logger.info(f"Recording complete, audio_data: {audio_data[0] is not None}")
+                except Exception as e:
+                    logger.error(f"Recording thread error: {e}")
+                    recording_error[0] = str(e)
+                finally:
+                    recording_complete.set()
 
             rec_thread = threading.Thread(target=record_thread, daemon=True)
             rec_thread.start()
 
-            await asyncio.get_event_loop().run_in_executor(None, self.wait_for_recording_stop)
+            logger.info("Waiting for recording to stop...")
+            while self.recording_active:
+                await asyncio.sleep(0.1)
+            
+            logger.info("Recording stopped by user")
 
-            # Wait for the recording thread to actually complete
-            await asyncio.get_event_loop().run_in_executor(None, lambda: recording_complete.wait(timeout=6.0))
+            await asyncio.get_event_loop().run_in_executor(
+                None, lambda: recording_complete.wait(timeout=10.0)
+            )
 
             self.hide_record_button()
-
-            if audio_data[0] is None:
-                self.update_status("⚠ Recording failed", SciFiColors.ERROR)
-                self.tts.speak("Voice recording failed")
-                self.show_progress(False)
+            
+            if recording_error[0]:
+                self.update_status(f"⚠ Recording error: {recording_error[0]}", SciFiColors.ERROR)
+                try:
+                    self.tts.speak("Voice recording failed")
+                except:
+                    pass
                 return
 
-            self.update_status("⟳ Analyzing voice with AASIST anti-spoofing...", SciFiColors.INFO)
-            self.tts.speak("Analyzing voice with advanced security")
+            if audio_data[0] is None:
+                self.update_status("⚠ Recording failed - no audio captured", SciFiColors.ERROR)
+                try:
+                    self.tts.speak("Voice recording failed")
+                except:
+                    pass
+                return
+            
+            logger.info("Audio data captured successfully")
 
-            # Use ultimate voice engine for verification
+            self.update_status("⟳ Analyzing voice with AASIST anti-spoofing...", SciFiColors.INFO)
+            self.show_progress(True)
+            self.page.update()
+            
+            try:
+                self.tts.speak("Analyzing voice with advanced security")
+            except:
+                pass
+
+            logger.info("Starting voice verification with ultimate engine")
             verification_result = self.ultimate_voice_engine.verify_voice(
                 user_id=user['id'],
                 audio_data=audio_data[0],
                 sample_rate=16000,
-                enable_challenge=False  # Can be enabled later if needed
+                enable_challenge=False
             )
+            
+            logger.info(f"Verification result: {verification_result}")
+            self.show_progress(False)
 
             if not verification_result['verified']:
                 failure_reason = verification_result['details'].get('failure_reason', 'Unknown error')
-                if verification_result['spoof_detected']:
+                if verification_result.get('spoof_detected', False):
                     self.update_status("⚠ Anti-spoofing: Voice rejected as suspicious", SciFiColors.ERROR)
-                    self.tts.speak("Voice rejected by anti-spoofing system")
+                    try:
+                        self.tts.speak("Voice rejected by anti-spoofing system")
+                    except:
+                        pass
                 else:
-                    confidence_pct = verification_result['confidence'] * 100
+                    confidence_pct = verification_result.get('confidence', 0) * 100
                     self.update_status(f"⚠ Voice verification failed - {confidence_pct:.1f}% confidence", SciFiColors.ERROR)
-                    self.tts.speak("Voice verification failed")
-                self.show_progress(False)
+                    try:
+                        self.tts.speak("Voice verification failed")
+                    except:
+                        pass
                 return
 
-            confidence_pct = verification_result['confidence'] * 100
+            confidence_pct = verification_result.get('confidence', 0) * 100
             self.update_status(f"✓ Voice verified with {confidence_pct:.1f}% confidence", SciFiColors.SUCCESS)
-            self.tts.speak("Voice verified successfully with advanced security")
+            try:
+                self.tts.speak("Voice verified successfully with advanced security")
+            except:
+                pass
             self.voice_verification_complete = True
             self.update_auth_progress("face_verifying")
-            await asyncio.sleep(1)
+            await asyncio.sleep(1.5)
             
             if verify_face:
                 self.update_status("⦿ Now verifying face (ArcFace)...", SciFiColors.INFO)
-                self.tts.speak("Now verifying face")
+                try:
+                    self.tts.speak("Now verifying face")
+                except:
+                    pass
                 await asyncio.sleep(1)
                 face_embeddings = self.db.get_face_embeddings(user['id'])
                 arcface_embeddings = [emb['embedding_data'] for emb in face_embeddings if isinstance(emb['embedding_data'], list) and len(emb['embedding_data']) == 512]
                 if arcface_embeddings:
-                    # Automatic face capture - no button required
                     self.update_status("⦿ Automatically capturing face for verification...", SciFiColors.INFO)
-                    self.tts.speak("Please look at the camera for automatic face verification")
+                    try:
+                        self.tts.speak("Please look at the camera for automatic face verification")
+                    except:
+                        pass
                     
-                    # Try multiple captures to get a good face
                     max_attempts = 3
                     face_verified = False
                     
@@ -2724,24 +2006,36 @@ class SecureXApp:
                         
                         if ret and frame is not None:
                             self.update_status("⟳ Processing face...", SciFiColors.INFO)
-                            self.tts.speak("Processing face")
+                            try:
+                                self.tts.speak("Processing face")
+                            except:
+                                pass
                             is_match, similarity, liveness_passed = self.verify_face_arcface(frame, arcface_embeddings)
                             similarity_percent = similarity * 100
                             
                             if is_match and liveness_passed:
                                 self.update_status(f"✅ Face verified (ArcFace) - {similarity_percent:.1f}% similarity", SciFiColors.SUCCESS)
-                                self.tts.speak("Face verified successfully")
+                                try:
+                                    self.tts.speak("Face verified successfully")
+                                except:
+                                    pass
                                 face_verified = True
                                 break
                             elif is_match and not liveness_passed:
                                 self.update_status(f"⚠ Liveness check failed - {similarity_percent:.1f}% similarity (attempt {attempt + 1})", SciFiColors.WARNING)
                                 if attempt < max_attempts - 1:
-                                    self.tts.speak("Liveness check failed, trying again")
+                                    try:
+                                        self.tts.speak("Liveness check failed, trying again")
+                                    except:
+                                        pass
                                     await asyncio.sleep(1)
                             else:
                                 self.update_status(f"⚠ Face verification failed - {similarity_percent:.1f}% similarity (attempt {attempt + 1})", SciFiColors.WARNING)
                                 if attempt < max_attempts - 1:
-                                    self.tts.speak("Face not recognized, trying again")
+                                    try:
+                                        self.tts.speak("Face not recognized, trying again")
+                                    except:
+                                        pass
                                     await asyncio.sleep(1)
                         else:
                             self.update_status(f"⚠ Face capture failed (attempt {attempt + 1})", SciFiColors.WARNING)
@@ -2750,30 +2044,34 @@ class SecureXApp:
                     
                     if not face_verified:
                         self.update_status("⚠ Face verification failed after all attempts", SciFiColors.ERROR)
-                        self.tts.speak("Face verification failed")
-                        self.show_progress(False)
+                        try:
+                            self.tts.speak("Face verification failed")
+                        except:
+                            pass
                         return
                 else:
                     self.update_status("⚠ No ArcFace profile found - Skipping", SciFiColors.WARNING)
-                    self.tts.speak("No face profile found, skipping face verification")
-                    self.face_verification_complete = True  # Consider it complete if no profile exists
+                    try:
+                        self.tts.speak("No face profile found, skipping face verification")
+                    except:
+                        pass
+                    self.face_verification_complete = True
                     self.update_auth_progress("complete")
                     await asyncio.sleep(1)
             
-            # Authentication successful - transition to dashboard
             self.update_status("✓ Authentication successful! Loading dashboard...", SciFiColors.SUCCESS)
-            self.tts.speak("Authentication successful")
+            try:
+                self.tts.speak("Authentication successful")
+            except:
+                pass
             await asyncio.sleep(1)
             self.show_progress(False)
             
-            # Clean up temp files after successful auth
             self.cleanup_old_temp_files()
             
-            # Store user and transition
             self.current_user = type('User', (), user)()
             self.current_view = "dashboard"
             
-            # Smooth transition
             self.page.controls.clear()
             dashboard = self.build_dashboard_view()
             self.page.add(dashboard)
@@ -2785,54 +2083,97 @@ class SecureXApp:
                 pass
             
         except Exception as e:
-            logger.error(f"Voice verification error: {e}")
+            logger.error(f"Voice verification error: {e}", exc_info=True)
             self.update_status(f"⚠ Error: {str(e)}", SciFiColors.ERROR)
-            self.tts.speak("Authentication failed due to an error")
+            try:
+                self.tts.speak("Authentication failed due to an error")
+            except:
+                pass
             self.show_progress(False)
 
     async def enroll_user_voice_registration(self, user: dict):
         """Enroll voice during registration using ultimate biometric engine"""
         try:
             self.update_reg_status("⟳ Recording 3 voice samples with data augmentation", SciFiColors.INFO)
-            self.tts.speak("Please provide 3 voice samples for secure enrollment")
+            try:
+                self.tts.speak("Please provide 3 voice samples for secure enrollment")
+            except:
+                pass
             await asyncio.sleep(1)
             
             audio_samples = []
             
-            for sample_num in range(1, 4):  # 3 samples
+            for sample_num in range(1, 4):
                 self.update_reg_status(f"⦿ Sample {sample_num}/3 - Click START RECORDING", SciFiColors.INFO)
-                self.tts.speak(f"Please speak for voice sample {sample_num} of 3")
-                self.show_reg_record_button(f"SAMPLE {sample_num} OF 3")
+                try:
+                    self.tts.speak(f"Please speak for voice sample {sample_num} of 3")
+                except:
+                    pass
+                    
+                self.show_reg_record_button(f"SAMPLE {sample_num} OF 3", mode="voice")
+                self.page.update()
                 
-                await asyncio.get_event_loop().run_in_executor(None, self.wait_for_reg_recording_start)
+                logger.info(f"Waiting for sample {sample_num} recording to start...")
+                while not self.reg_recording_active:
+                    await asyncio.sleep(0.1)
+                
+                logger.info(f"Sample {sample_num} recording started")
                 
                 recording_complete = threading.Event()
                 audio_data_holder = [None]
+                recording_error = [None]
                 
                 def record_thread():
-                    audio_data_holder[0] = self.audio_recorder.record_audio(duration=5.0)  # 5 seconds per sample
-                    recording_complete.set()
+                    try:
+                        logger.info(f"Recording sample {sample_num}")
+                        audio_data_holder[0] = self.audio_recorder.record_audio(duration=5.0)
+                        logger.info(f"Sample {sample_num} recorded: {audio_data_holder[0] is not None}")
+                    except Exception as e:
+                        logger.error(f"Recording error: {e}")
+                        recording_error[0] = str(e)
+                    finally:
+                        recording_complete.set()
                 
                 rec_thread = threading.Thread(target=record_thread, daemon=True)
                 rec_thread.start()
                 
-                await asyncio.get_event_loop().run_in_executor(None, self.wait_for_reg_recording_stop)
+                logger.info(f"Waiting for sample {sample_num} recording to stop...")
+                while self.reg_recording_active:
+                    await asyncio.sleep(0.1)
                 
-                # Wait for recording to complete
-                await asyncio.get_event_loop().run_in_executor(None, lambda: recording_complete.wait(timeout=6.0))
+                logger.info(f"Sample {sample_num} recording stopped")
+                
+                await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: recording_complete.wait(timeout=10.0)
+                )
                 
                 self.hide_reg_record_button()
+                
+                if recording_error[0]:
+                    self.update_reg_status(f"⚠ Sample {sample_num} error: {recording_error[0]}", SciFiColors.WARNING)
+                    try:
+                        self.tts.speak("Recording failed, please try again")
+                    except:
+                        pass
+                    await asyncio.sleep(1)
+                    continue
                 
                 audio_data = audio_data_holder[0]
                 
                 if audio_data is None:
-                    self.update_reg_status(f"⚠ Sample {sample_num} failed - Skipping", SciFiColors.WARNING)
-                    self.tts.speak("Recording failed, please try again")
+                    self.update_reg_status(f"⚠ Sample {sample_num} failed - No audio captured", SciFiColors.WARNING)
+                    try:
+                        self.tts.speak("Recording failed, please try again")
+                    except:
+                        pass
                     await asyncio.sleep(1)
                     continue
                 
                 self.update_reg_status(f"✓ Sample {sample_num} recorded - Processing", SciFiColors.SUCCESS)
-                self.tts.speak("Recording complete, processing voice sample")
+                try:
+                    self.tts.speak("Recording complete, processing voice sample")
+                except:
+                    pass
                 await asyncio.sleep(0.5)
                 
                 audio_samples.append(audio_data)
@@ -2842,39 +2183,56 @@ class SecureXApp:
             
             if len(audio_samples) < 2:
                 self.update_reg_status("⚠ Insufficient valid samples - Please try again", SciFiColors.ERROR)
-                self.tts.speak("Insufficient voice samples recorded, please restart enrollment")
+                try:
+                    self.tts.speak("Insufficient voice samples recorded, please restart enrollment")
+                except:
+                    pass
                 self.show_reg_progress(False)
                 return
             
-            # Use ultimate voice engine for enrollment
             self.update_reg_status("⟳ Creating secure voice profile with augmentation...", SciFiColors.INFO)
-            self.tts.speak("Creating your secure voice profile")
+            self.show_reg_progress(True)
+            try:
+                self.tts.speak("Creating your secure voice profile")
+            except:
+                pass
             
+            logger.info(f"Enrolling voice with {len(audio_samples)} samples")
             success = self.ultimate_voice_engine.enroll_user_voice(
                 user_id=user['id'],
                 audio_samples=audio_samples,
                 sample_rate=16000
             )
             
+            self.show_reg_progress(False)
+            
             if success:
                 self.update_reg_status("✅ Voice enrollment complete! Profile secured with anti-spoofing", SciFiColors.SUCCESS)
-                self.tts.speak("Voice enrollment complete with advanced security features")
+                try:
+                    self.tts.speak("Voice enrollment complete with advanced security features")
+                except:
+                    pass
                 self.voice_enrollment_complete = True
                 self.update_auth_progress("face_enrolling")
                 await asyncio.sleep(2)
             else:
                 self.update_reg_status("⚠ Voice enrollment failed - Please try again", SciFiColors.ERROR)
-                self.tts.speak("Voice enrollment failed, please try again")
-                self.show_reg_progress(False)
+                try:
+                    self.tts.speak("Voice enrollment failed, please try again")
+                except:
+                    pass
             
         except Exception as e:
-            logger.error(f"Voice enrollment error: {e}")
+            logger.error(f"Voice enrollment error: {e}", exc_info=True)
             self.update_reg_status(f"⚠ Enrollment error: {str(e)}", SciFiColors.ERROR)
-            self.tts.speak("Voice enrollment failed due to an error")
+            try:
+                self.tts.speak("Voice enrollment failed due to an error")
+            except:
+                pass
             self.show_reg_progress(False)
 
     def show_dashboard(self):
-        """Render the dashboard view."""
+        """Render the dashboard view"""
         try:
             logger.info("Rendering dashboard view.")
             self.page.controls.clear()
@@ -2890,7 +2248,6 @@ class SecureXApp:
         """Logout current user and show login view"""
         logger.info("Logging out user")
         
-        # Close all active dialogs
         try:
             for dialog in self.active_dialogs[:]:
                 try:
@@ -2903,10 +2260,8 @@ class SecureXApp:
         self.active_dialogs.clear()
         self.current_view = "login"
         
-        # Clean up temp files on logout
         self.cleanup_old_temp_files()
         
-        # Clear page and show login
         self.page.controls.clear()
         login = self.build_login_view()
         self.page.add(login)
@@ -2951,32 +2306,6 @@ class SecureXApp:
             logger.error("Error during shutdown: %s", exc)
         
         logger.info("Application shutdown complete")
-
-    def _create_quick_stat(self, label: str, value: str, color: str) -> ft.Container:
-        """Create a quick stat display"""
-        return ft.Container(
-            content=ft.Column([
-                ft.Text(
-                    value,
-                    size=16,
-                    weight=ft.FontWeight.BOLD,
-                    color=color,
-                    text_align=ft.TextAlign.CENTER,
-                ),
-                ft.Text(
-                    label.upper(),
-                    size=10,
-                    color=SciFiColors.TEXT_MUTED,
-                    weight=ft.FontWeight.W_600,
-                    text_align=ft.TextAlign.CENTER,
-                ),
-            ], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-            padding=ft.padding.all(12),
-            border_radius=8,
-            bgcolor=ft.Colors.with_opacity(0.05, color),
-            border=ft.border.all(1, ft.Colors.with_opacity(0.3, color)),
-            alignment=ft.alignment.center,
-        )
 
 
 def main(page: ft.Page):
