@@ -113,7 +113,7 @@ class AAISTAntiSpoofingEngine:
                 "sample_rate": self.sample_rate,
             }
             
-            logger.info(f"Anti-spoofing result: {'GENUINE ✅' if is_genuine else 'SPOOFED 🚫'} (confidence: {confidence:.2%})")
+            logger.info(f"Anti-spoofing result: {'GENUINE' if is_genuine else 'SPOOFED'} (confidence: {confidence:.2%})")
             
             return is_genuine, confidence, details
             

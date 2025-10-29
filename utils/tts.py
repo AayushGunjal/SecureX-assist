@@ -29,6 +29,11 @@ class TextToSpeech:
         self.engine: Optional[pyttsx3.Engine] = None
         self._lock = threading.Lock()
         
+        # TTS queue for handling concurrent requests
+        self._tts_queue = []
+        self._tts_thread = None
+        self._shutdown = False
+        
         if self.enabled:
             self._initialize_engine()
     
@@ -74,27 +79,51 @@ class TextToSpeech:
                     self.engine.say(text)
                     self.engine.runAndWait()
                 else:
-                    # For non-blocking, use a separate thread with its own engine
-                    thread = threading.Thread(target=self._speak_async, args=(text,))
-                    thread.daemon = True
-                    thread.start()
+                    # Use a queue-based approach to avoid run loop conflicts
+                    if not hasattr(self, '_tts_queue'):
+                        self._tts_queue = []
+                        self._tts_thread = None
+                    
+                    self._tts_queue.append(text)
+                    self._process_queue_async()
                     
         except RuntimeError as e:
             if "run loop already started" in str(e):
-                logger.warning("TTS run loop already started - using async method")
-                # Fall back to async method
-                thread = threading.Thread(target=self._speak_async, args=(text,))
-                thread.daemon = True
-                thread.start()
+                logger.warning("TTS run loop already started - queuing speech")
+                # Queue the speech for later
+                if not hasattr(self, '_tts_queue'):
+                    self._tts_queue = []
+                    self._tts_thread = None
+                self._tts_queue.append(text)
+                self._process_queue_async()
             else:
                 logger.error(f"TTS speech failed: {e}")
         except Exception as e:
             logger.error(f"TTS speech failed: {e}")
     
-    def _speak_async(self, text: str):
-        """Async speech using a separate engine instance"""
+    def _process_queue_async(self):
+        """Process TTS queue asynchronously"""
+        if self._tts_thread and self._tts_thread.is_alive():
+            return  # Already processing
+        
+        self._tts_thread = threading.Thread(target=self._process_queue, daemon=True)
+        self._tts_thread.start()
+    
+    def _process_queue(self):
+        """Process all queued TTS messages"""
+        while self._tts_queue and not self._shutdown:
+            try:
+                text = self._tts_queue.pop(0)
+                self._speak_blocking(text)
+            except Exception as e:
+                logger.error(f"Queued TTS failed: {e}")
+                if self._shutdown:
+                    break
+    
+    def _speak_blocking(self, text: str):
+        """Speak text in a blocking manner with proper cleanup"""
         try:
-            # Create a new engine instance for this thread
+            # Create a fresh engine instance for each speech
             engine = pyttsx3.init()
             engine.setProperty('rate', self.rate)
             engine.setProperty('volume', self.volume)
@@ -115,13 +144,11 @@ class TextToSpeech:
             engine.stop()
             
         except Exception as e:
-            logger.error(f"Async TTS failed: {e}")
-            if "run loop already started" in str(e):
-                logger.warning("TTS run loop already started in background thread - skipping speech")
-            else:
-                logger.debug(f"Background TTS failed: {e}")
-        except Exception as e:
-            logger.debug(f"Background TTS skipped: {e}")
+            logger.error(f"Blocking TTS failed: {e}")
+    
+    def _speak_async(self, text: str):
+        """Legacy async method - now uses queue"""
+        self._speak_blocking(text)
     
     def welcome(self, username: str = "user"):
         """Welcome message"""
@@ -180,9 +207,15 @@ class TextToSpeech:
         self.speak(message)
     
     def shutdown(self):
-        """Cleanup TTS engine"""
+        """Cleanup TTS engine and stop queue processing"""
+        self._shutdown = True
         if self.engine:
             try:
                 self.engine.stop()
             except:
                 pass
+        
+        # Clear queue and wait for thread to finish
+        self._tts_queue.clear()
+        if self._tts_thread and self._tts_thread.is_alive():
+            self._tts_thread.join(timeout=2.0)
