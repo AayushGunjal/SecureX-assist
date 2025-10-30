@@ -1,31 +1,9 @@
-import flet as ft
-import asyncio
 import logging
-from pathlib import Path
-from typing import Optional
-import time
-import tempfile
-import threading
-import random as rnd
-import numpy as np
-import datetime
-from types import SimpleNamespace
-from importlib import import_module
-import os
-import cv2
-import numpy as np
-from numpy.linalg import norm
-from numpy.linalg import norm
-import insightface
-import pyautogui
 import psutil
-import sys
-
-# Add project root to Python path
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
-
-# SciFiColors theme class
+import pyautogui
+import datetime
+import time
+import os
 class SciFiColors:
     BG_SPACE = "#10172b"
     BG_DARK = "#0a1628"
@@ -43,7 +21,6 @@ class SciFiColors:
     BORDER = "#2e3a59"
     BORDER_GLOW = "#00eaff"
 
-# Setup logger
 logger = logging.getLogger("SecureXApp")
 logger.setLevel(logging.INFO)
 if not logger.hasHandlers():
@@ -51,9 +28,19 @@ if not logger.hasHandlers():
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
+import flet as ft
+import threading
+import numpy as np
+import cv2
+from numpy.linalg import norm
+import insightface
+import logging
+import asyncio
+import logging
+from pathlib import Path
+from types import SimpleNamespace
 
-
-# Import all required classes from core and utils modules
+# --- Core and Utils Imports for SecureXApp ---
 from core.database import Database
 from core.voice_engine import VoiceEngine
 from core.voice_engine import VoiceQualityAnalyzer
@@ -64,7 +51,7 @@ from utils.tts import TextToSpeech
 from core.voice_assistant import VoiceAssistant
 from core.face_recognition_engine import FaceRecognitionEngine
 from utils.helpers import create_temp_directory, cleanup_temp_files
-
+# --- End Imports ---
 
 class SecureXApp:
     """Main application class with sci-fi themed UI"""
@@ -74,6 +61,70 @@ class SecureXApp:
         self.config = config
 
         # Initialize components
+        self.db = Database(config.get('database', {}).get('path', 'securex_db.sqlite'))
+        self.voice_engine = VoiceEngine(config)
+        self.ultimate_voice_engine = UltimateVoiceBiometricEngine(config, self.db)
+        self.security_manager = SecurityManager(config)
+        self.audio_recorder = AudioRecorder(config)
+        self.vad = VoiceActivityDetector(config)
+        self.tts = TextToSpeech(config)
+        self.voice_assistant = VoiceAssistant()
+        self.voice_assistant.setup_default_commands()
+
+        # Load InsightFace ArcFace model for face recognition
+        self.arcface_model = insightface.app.FaceAnalysis(providers=['CPUExecutionProvider'])
+        self.arcface_model.prepare(ctx_id=0, det_size=(640, 640))
+
+        self._audio_stream_ctx = SimpleNamespace(
+            recorder=self.audio_recorder,
+            vad_detector=self.vad
+        )
+
+        # Session state
+        self.current_user = None
+        self.current_view = "login"
+
+        # Voice assistant state
+        self.continuous_mode_active = False
+        self.voice_assistant_active = False
+        self.voice_assistant_dialog_open = False
+
+        # Navigation state
+        self.current_nav_section = "dashboard"
+
+        # Recording states
+        self.recording_active = False
+        self.reg_recording_active = False
+        self.face_capture_requested = False
+        self.recording_task = None
+        # NEW: Recording control events
+        self.recording_started_event = threading.Event()
+        self.recording_stop_event = threading.Event()
+        self.reg_recording_started_event = threading.Event()
+        self.reg_recording_stop_event = threading.Event()
+        # Registration recording holders
+        self.reg_recording_thread = None
+        self.reg_recording_complete_event = threading.Event()
+        self.reg_audio_holder = [None]
+
+        # Authentication flow states
+        self.auth_step = "idle"
+        self.voice_enrollment_complete = False
+        self.face_enrollment_complete = False
+        self.voice_verification_complete = False
+        self.face_verification_complete = False
+
+        # Temp directory
+        self.temp_dir = create_temp_directory()
+
+        # UI components
+        self.interaction_log = None
+
+        # Dialog management
+        self.active_dialogs = []
+
+        # Set up page close handler
+        self.page.on_close = self._on_app_close
         self.db = Database(config.get('database', {}).get('path', 'securex_db.sqlite'))
         self.voice_engine = VoiceEngine(config)
         self.ultimate_voice_engine = UltimateVoiceBiometricEngine(config, self.db)
@@ -110,7 +161,10 @@ class SecureXApp:
         self.reg_recording_active = False
         self.face_capture_requested = False
         self.recording_task = None
-        
+        # Registration recording holders
+        self.reg_recording_thread = None
+        self.reg_recording_complete_event = threading.Event()
+        self.reg_audio_holder = [None]
         # NEW: Recording control events
         self.recording_started_event = threading.Event()
         self.recording_stop_event = threading.Event()
@@ -1581,10 +1635,12 @@ class SecureXApp:
                 self.update_status("🎤 Listening... Click STOP LISTENING when done", SciFiColors.WARNING)
                 self.page.update()
 
-                # Schedule the async recording starter (pass the coroutine function, not a coroutine object)
+                # Schedule the async recording starter
+                # We pass a coroutine object to page.run_task to ensure it runs in the page's loop.
                 self.page.run_task(self.start_voice_recording_manual)
             else:
                 # If recording, schedule stop operation (async)
+                # Update UI optimistically (stop request)
                 self.page.run_task(self.stop_voice_recording_manual)
         except Exception as ex:
             logger.error(f"_on_record_button_click error: {ex}", exc_info=True)
@@ -1925,14 +1981,9 @@ class SecureXApp:
                     cap.release()
                     
                     if ret and frame is not None:
-                        self.update_status("⟳ Processing face...", SciFiColors.INFO)
-                        try:
-                            self.tts.speak("Processing face")
-                        except:
-                            pass
+                        # Run face verification logic here
                         is_match, similarity, liveness_passed = self.verify_face_arcface(frame, arcface_embeddings)
                         similarity_percent = similarity * 100
-                        
                         if is_match and liveness_passed:
                             self.update_status(f"✅ Face verified (ArcFace) - {similarity_percent:.1f}% similarity", SciFiColors.SUCCESS)
                             try:
@@ -2016,10 +2067,36 @@ class SecureXApp:
         """Handle record button click for registration"""
         logger.info("=== REGISTRATION RECORD BUTTON CLICKED ===")
         
+        # Start recording: spawn a thread that runs the AudioRecorder.record_audio()
+        # and set the started event so the registration flow can continue.
         if not self.reg_recording_active:
             self.reg_recording_active = True
+
+            # Clear previous holder/event
+            self.reg_recording_complete_event.clear()
+            self.reg_audio_holder[0] = None
+            self.reg_recording_stop_event.clear()
+
+            def _reg_record_thread():
+                try:
+                    logger.info("Registration thread: starting record_audio()")
+                    # Record for up to 5 minutes (stoppable via stop_recording)
+                    audio = self.audio_recorder.record_audio(duration=300.0)
+                    self.reg_audio_holder[0] = audio
+                    logger.info("Registration thread: record_audio finished, audio captured=%s", audio is not None)
+                except Exception as e:
+                    logger.error("Registration recording thread error: %s", e, exc_info=True)
+                finally:
+                    # Signal completion regardless of success
+                    self.reg_recording_complete_event.set()
+
+            self.reg_recording_thread = threading.Thread(target=_reg_record_thread, daemon=True)
+            self.reg_recording_thread.start()
+
+            # Signal to enrollment flow that recording has started
             self.reg_recording_started_event.set()
-            
+
+            # Update UI
             self.reg_record_button.text = "◉ STOP RECORDING"
             self.reg_record_button.icon = ft.Icons.STOP
             self.reg_record_button.style = ft.ButtonStyle(
@@ -2029,11 +2106,18 @@ class SecureXApp:
             )
             self.update_reg_status("⦿ Recording... Speak now!", SciFiColors.ERROR)
             self.page.update()
-            logger.info("Registration recording started")
+            logger.info("Registration recording started (threaded)")
         else:
+            # Stop recording: request AudioRecorder to stop and set stop event
             self.reg_recording_active = False
             self.reg_recording_stop_event.set()
-            
+            try:
+                # Signal the underlying recorder to stop as quickly as possible
+                self.audio_recorder.stop_recording()
+            except Exception:
+                logger.exception("Failed to stop audio recorder cleanly")
+
+            # Update UI optimistically; actual hiding/reset will be handled after audio is available
             self.reg_record_button.text = "START RECORDING"
             self.reg_record_button.icon = ft.Icons.MIC
             self.reg_record_button.style = ft.ButtonStyle(
@@ -2041,9 +2125,9 @@ class SecureXApp:
                 color=SciFiColors.BG_DARK,
                 shape=ft.RoundedRectangleBorder(radius=8),
             )
-            self.update_reg_status("✓ Recording complete", SciFiColors.SUCCESS)
+            self.update_reg_status("✓ Recording stopped - processing...", SciFiColors.SUCCESS)
             self.page.update()
-            logger.info("Registration recording stopped")
+            logger.info("Registration recording stop requested")
 
     def show_record_button(self, mode="voice"):
         """Show recording button"""
@@ -2370,42 +2454,22 @@ class SecureXApp:
                 self.reg_recording_stop_event.clear()
                 logger.info(f"Sample {sample_num} recording stopped")
                 
-                # Record the audio in thread
-                recording_complete = threading.Event()
-                audio_data_holder = [None]
-                recording_error = [None]
-                
-                def record_thread():
-                    try:
-                        logger.info(f"Recording sample {sample_num}")
-                        audio_data_holder[0] = self.audio_recorder.record_audio(duration=5.0)
-                        logger.info(f"Sample {sample_num} recorded: {audio_data_holder[0] is not None}")
-                    except Exception as e:
-                        logger.error(f"Recording error: {e}")
-                        recording_error[0] = str(e)
-                    finally:
-                        recording_complete.set()
-                
-                rec_thread = threading.Thread(target=record_thread, daemon=True)
-                rec_thread.start()
-                
+                # Wait for the registration recording thread to complete (started by UI click handler)
+                logger.info("Waiting for registration recording thread to finish for sample %d...", sample_num)
                 await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: recording_complete.wait(timeout=10.0)
+                    None, lambda: self.reg_recording_complete_event.wait(timeout=15.0)
                 )
-                
+
+                # Hide the registration button now that recording is finished
                 self.hide_reg_record_button()
-                
-                if recording_error[0]:
-                    self.update_reg_status(f"⚠ Sample {sample_num} error: {recording_error[0]}", SciFiColors.WARNING)
-                    try:
-                        self.tts.speak("Recording failed, please try again")
-                    except:
-                        pass
-                    await asyncio.sleep(1)
-                    continue
-                
-                audio_data = audio_data_holder[0]
-                
+
+                # Retrieve audio from holder
+                audio_data = None
+                try:
+                    audio_data = self.reg_audio_holder[0]
+                except Exception:
+                    audio_data = None
+
                 if audio_data is None:
                     self.update_reg_status(f"⚠ Sample {sample_num} failed - No audio captured", SciFiColors.WARNING)
                     try:
@@ -2414,7 +2478,7 @@ class SecureXApp:
                         pass
                     await asyncio.sleep(1)
                     continue
-                
+
                 self.update_reg_status(f"✓ Sample {sample_num} recorded - Processing", SciFiColors.SUCCESS)
                 try:
                     self.tts.speak("Recording complete, processing voice sample")
