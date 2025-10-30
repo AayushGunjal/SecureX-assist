@@ -1,59 +1,34 @@
 # Core Framework
 flet>=0.28.3,<0.29.0
 
-# AI/Machine Learning
-torch>=2.4.1,<2.5.0
-torchaudio>=2.4.1,<2.5.0  # Note: For optimal audio processing, install FFmpeg separately
-pyannote.audio>=4.0.1,<4.1.0
-speechbrain>=0.5.16,<0.6.0
-huggingface-hub>=0.19.0,<0.20.0
-face_recognition>=1.3.0
-opencv-python>=4.8.0,<4.9.0
+# Basic AI/Machine Learning - temporarily removed transformers due to build issues
+torch>=2.2.0,<2.3.0
+torchaudio>=2.2.0,<2.3.0
 
 # Audio Processing
 sounddevice>=0.4.5,<0.5.0
-numpy>=1.22.3,<2.0.0  # Compatible with gensim
-scipy>=1.7.0,<1.14.0  # Compatible with gensim
-protobuf>=4.25.3,<5.0.0  # Compatible with mediapipe
-
-# Voice Activity Detection
-silero-vad>=0.4.0
-webrtcvad>=2.0.10,<3.0.0
-
-# Speech Recognition
+numpy>=1.22.3,<2.0.0
+scipy>=1.7.0,<1.14.0
 vosk>=0.3.21,<0.4.0
-
-# Advanced Anti-Spoofing (SOTA Models)
-transformers>=4.30.0,<4.31.0
 librosa>=0.10.0,<0.11.0
 
-# Deep Learning Face Recognition
+# Computer Vision
+opencv-python>=4.8.0,<4.9.0
 insightface>=0.7.3
-mediapipe>=0.10.0,<0.11.0
-
-# Ultimate Stack Components
-# speechbrain already specified above  # ECAPA-TDNN speaker embedding
-noisereduce>=3.0.0,<4.0.0   # Noise reduction
-# webrtcvad already specified above    # Voice Activity Detection
 
 # Text-to-Speech
 piper-tts>=1.2.0,<2.0.0
-# pyttsx3>=2.90,<3.0.0  # Replaced with Piper TTS
+pyttsx3>=2.90
 
-# Intent Classification
-sentence-transformers>=2.2.0,<3.0.0
+# Speaker Embedding Models
+pyannote.audio>=3.0.0,<4.0.0
+speechbrain>=0.5.16,<1.0.0
 
-# Configuration Management
-omegaconf>=2.3.0,<2.4.0
-hydra-core>=1.3.2,<1.4.0
+# Intent Classification - temporarily removed due to transformers dependency
+# sentence-transformers>=2.2.0,<3.0.0
+
+# Configuration
 python-dotenv>=1.0.0,<1.1.0
 
 # System Integration
 pyautogui>=0.9.53,<0.10.0
-
-# Data Processing
-openpyxl>=3.1.2,<3.2.0
-
-# Development Tools
-pytest>=7.0.0,<8.0.0
-pytest-cov>=3.0.0

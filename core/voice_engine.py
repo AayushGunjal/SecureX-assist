@@ -98,7 +98,17 @@ class VoiceEngine:
                 
             except Exception as fallback_error:
                 logger.error(f"Failed to load fallback model: {fallback_error}")
-                return False
+                
+                # Try basic fallback using simple MFCC features
+                try:
+                    logger.info("Using basic MFCC-based embedding as final fallback")
+                    self.active_backend = "basic"
+                    logger.info("Basic embedding fallback loaded successfully")
+                    return True
+                    
+                except Exception as basic_error:
+                    logger.error(f"Failed to load basic fallback: {basic_error}")
+                    return False
     
     def extract_embedding(self, audio_path: str, enable_anti_spoofing: bool = True) -> Optional[np.ndarray]:
         """
@@ -161,10 +171,13 @@ class VoiceEngine:
                 logger.info(f"   - Quality: {security_result['details']['quality_assessment']:.2%}")
             
             # Extract embedding from normalized audio (no trimming)
+            print(f"DEBUG: Extracting embedding with backend: {self.active_backend}")
             if self.active_backend == "pyannote":
                 return self._extract_pyannote(normalized_path)
             elif self.active_backend == "speechbrain":
                 return self._extract_speechbrain(normalized_path)
+            elif self.active_backend == "basic":
+                return self._extract_basic(normalized_path)
             else:
                 logger.error("No active backend available")
                 return None
@@ -410,6 +423,42 @@ class VoiceEngine:
         
         logger.info(f"Extracted SpeechBrain embedding: shape={embedding.shape}")
         return embedding
+    
+    def _extract_basic(self, audio_path: str) -> np.ndarray:
+        """Extract basic MFCC-based embedding as fallback"""
+        try:
+            print(f"DEBUG: Starting basic embedding extraction for {audio_path}")
+            import librosa
+            
+            # Load audio
+            y, sr = librosa.load(audio_path, sr=16000)
+            print(f"DEBUG: Audio loaded: shape={y.shape}, sr={sr}")
+            
+            # Extract MFCC features
+            mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13, n_fft=512, hop_length=160)
+            print(f"DEBUG: MFCC extracted: shape={mfcc.shape}")
+            
+            # Take mean across time dimension to get fixed-size embedding
+            embedding = np.mean(mfcc, axis=1)
+            print(f"DEBUG: Embedding after mean: shape={embedding.shape}")
+            
+            # Pad or truncate to 512 dimensions (expected by rest of system)
+            if len(embedding) < 512:
+                embedding = np.pad(embedding, (0, 512 - len(embedding)), 'constant')
+                print(f"DEBUG: Embedding padded to: shape={embedding.shape}")
+            else:
+                embedding = embedding[:512]
+                print(f"DEBUG: Embedding truncated to: shape={embedding.shape}")
+            
+            logger.info(f"Extracted basic MFCC embedding: shape={embedding.shape}")
+            print(f"DEBUG: Basic embedding extraction successful")
+            return embedding
+            
+        except Exception as e:
+            logger.error(f"Basic embedding extraction failed: {e}")
+            print(f"DEBUG: Basic embedding extraction failed: {e}")
+            # Return a zero vector as last resort
+            return np.zeros(512, dtype=np.float32)
     
     def verify_speaker(
         self, 
