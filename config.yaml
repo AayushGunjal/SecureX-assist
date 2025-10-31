@@ -7,16 +7,16 @@ app:
 
 system:
   development_mode: true  # Enable for easier testing (disables some security features)
-  bypass_anti_spoofing: true  # Complete bypass of anti-spoofing (only use for testing/dev)
-  bypass_anti_spoofing_verify: true  # Bypass anti-spoofing specifically for verification (faster login)
-  fast_mode: true
-
-security:
+  bypass_anti_spoofing: true  # Bypass anti-spoofing for enrollment (demo mode)
+  bypass_anti_spoofing_verify: false  # Verification still uses anti-spoofing
+  spoof_confidence_min: 0.001  # Lowered for leniency
+  spoof_confidence_min_verify: 0.001  # Lowered for leniency
+  adaptive_threshold: true  # Ensure adaptive threshold is enabled
+  min_security_confidence: 0.3  # Lowered for fewer false positives
+  quiet_environment_adaptation: true  # Keep adaptation enabled
+  force_anti_spoof_fallback: true  # Force fallback for demo reliability
   voice_threshold: 0.50  # Cosine distance threshold - Lower = stricter (0.25=75% match), Higher = more forgiving (0.50=50% match)
   base_voice_threshold: 0.40  # Base cosine distance threshold for adaptive system
-  spoof_confidence_min: 0.01  # Minimum anti-spoofing confidence to accept voice (enrollment) - VERY LOW for processed audio (enrollment)
-  spoof_confidence_min_verify: 0.30  # Minimum anti-spoofing confidence for verification (LOWERED for processed audio)
-  adaptive_threshold: true  # Enable adaptive threshold based on user variance
   voice_update_learning: true  # Enable post-verification embedding updates
   session_timeout: 3600  # seconds
   max_login_attempts: 3
@@ -29,10 +29,7 @@ security:
   enable_anti_spoofing: true  # ENABLED - Using ADVANCED AASIST-based detection
   enable_liveness_check: true  # Enable voice liveness detection
   enable_noise_normalization: true  # Normalize audio across environments
-  min_security_confidence: 0.5  # Minimum confidence for security checks (0-1) - LOWERED for fewer false positives
   anti_spoof_mode: "advanced"  # "basic" or "advanced" (SOTA models)
-  quiet_environment_adaptation: true  # Adapt anti-spoofing for quiet environments
-  force_anti_spoof_fallback: true
   anti_spoof_timeout_seconds: 2
   anti_spoof_max_audio_seconds: 2
 

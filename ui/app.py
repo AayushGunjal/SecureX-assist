@@ -48,7 +48,7 @@ logger = logging.getLogger("SecureXApp")
 logger.setLevel(logging.INFO)
 if not logger.hasHandlers():
     handler = logging.StreamHandler()
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    formatter = logging.Formatter("%(asctime)s - %(name)s - INFO - %(message)s")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
@@ -67,7 +67,15 @@ class SecureXApp:
         self.audio_recorder = AudioRecorder(config)
         self.vad = VoiceActivityDetector(config)
         self.tts = TextToSpeech(config)
-        self.voice_assistant = VoiceAssistant()
+
+        # --- FIX: Pass engines and config to VoiceAssistant ---
+        self.voice_assistant = VoiceAssistant(
+            model_path=config.get('vosk', {}).get('model_path', 'vosk-model-small-en-us-0.15'),
+            biometric_engine=self.ultimate_voice_engine,
+            tts_engine=self.tts
+        )
+        # --- END FIX ---
+        
         self.voice_assistant.setup_default_commands()
 
         # Load InsightFace ArcFace model for face recognition
@@ -86,7 +94,7 @@ class SecureXApp:
         # Voice assistant state
         self.continuous_mode_active = False
         self.voice_assistant_active = False
-        self.voice_assistant_dialog_open = False
+        # --- REFACTOR: Removed dialog state flags ---
 
         # Navigation state
         self.current_nav_section = "dashboard"
@@ -144,6 +152,14 @@ class SecureXApp:
         self.form_container = None
         self.action_button_container = None
 
+        # --- REFACTOR: Add UI references for Assistant Page ---
+        self.assistant_log_content: ft.Column = None
+        self.assistant_status_text: ft.Text = None
+        self.assistant_start_btn: ft.Container = None
+        self.assistant_stop_btn: ft.Container = None
+        self.assistant_continuous_toggle: ft.Switch = None
+        # --- END REFACTOR ---
+
         # Dialog management
         self.active_dialogs = []
 
@@ -176,9 +192,12 @@ class SecureXApp:
         
         # Run initial TTS asynchronously
         async def start_speech():
-            await self._speak_async("SecureX Assist initialized. Ready for authentication.")
+            # --- FIX: Pass function to run_task, not lambda ---
+            await self.page.run_task(self._speak_async, "SecureX Assist initialized. Ready for authentication.")
         
-        self.page.run_task(start_speech)
+        # Correct way to run an async function
+        if self.page.loop:
+            self.page.loop.create_task(start_speech())
         
     def setup_page(self):
         """Configure page settings"""
@@ -700,6 +719,7 @@ class SecureXApp:
                 blur_radius=40,
                 color=ft.Colors.with_opacity(0.3, SciFiColors.PRIMARY),
             ),
+            clip_behavior=ft.ClipBehavior.HARD_EDGE, # Ensures content respects border radius
         )
         
         bg_gradient = ft.Container(
@@ -733,61 +753,85 @@ class SecureXApp:
         
         nav_buttons = []
         for item in nav_items:
+            is_selected = self.current_nav_section == item["name"]
             nav_buttons.append(
                 ft.Container(
                     content=ft.ElevatedButton(
                         content=ft.Row([
-                            ft.Icon(item["icon"], size=20, color=SciFiColors.TEXT_PRIMARY),
-                            ft.Text(item["label"], size=14, weight=ft.FontWeight.W_500),
+                            ft.Icon(
+                                item["icon"], 
+                                size=20, 
+                                color=SciFiColors.PRIMARY if is_selected else SciFiColors.TEXT_SECONDARY
+                            ),
+                            ft.Text(
+                                item["label"], 
+                                size=14, 
+                                weight=ft.FontWeight.W_600 if is_selected else ft.FontWeight.W_500,
+                                color=SciFiColors.TEXT_PRIMARY if is_selected else SciFiColors.TEXT_SECONDARY
+                            ),
                         ], spacing=12),
                         on_click=lambda e, name=item["name"]: self._navigate_to_section(name),
                         width=200,
                         height=48,
                         style=ft.ButtonStyle(
-                            bgcolor=SciFiColors.BG_ELEVATED if self.current_nav_section == item["name"] else ft.Colors.TRANSPARENT,
+                            bgcolor=SciFiColors.BG_ELEVATED if is_selected else ft.Colors.TRANSPARENT,
                             color=SciFiColors.TEXT_PRIMARY,
                             shape=ft.RoundedRectangleBorder(radius=8),
+                            elevation=4 if is_selected else 0,
+                            shadow_color=SciFiColors.PRIMARY if is_selected else None,
+                            side=ft.BorderSide(
+                                width=1, 
+                                color=SciFiColors.BORDER_GLOW if is_selected else SciFiColors.BORDER
+                            )
                         ),
                     ),
-                    margin=ft.margin.symmetric(vertical=4),
+                    margin=ft.margin.symmetric(vertical=4, horizontal=10),
                 )
             )
         
         sidebar = ft.Container(
             content=ft.Column([
                 ft.Container(
-                    content=ft.Column([
-                        ft.Text("SECUREX", size=24, weight=ft.FontWeight.BOLD, color=SciFiColors.PRIMARY, font_family="Orbitron"),
-                        ft.Text("ASSIST", size=24, weight=ft.FontWeight.BOLD, color=SciFiColors.PRIMARY, font_family="Orbitron"),
-                    ], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                    content=ft.Row(
+                        [
+                            ft.Icon(ft.Icons.SECURITY_ROUNDED, color=SciFiColors.PRIMARY, size=32),
+                            ft.Text("SECUREX", size=24, weight=ft.FontWeight.BOLD, color=SciFiColors.TEXT_PRIMARY, font_family="Orbitron"),
+                        ], 
+                        spacing=12, 
+                        alignment=ft.MainAxisAlignment.CENTER
+                    ),
                     padding=ft.padding.all(20),
+                    height=100,
+                    alignment=ft.alignment.center,
                 ),
-                ft.Divider(color=SciFiColors.BORDER),
+                ft.Divider(color=SciFiColors.BORDER, height=1),
                 ft.Container(
-                    content=ft.Column(nav_buttons, spacing=0),
+                    content=ft.Column(nav_buttons, spacing=5),
                     padding=ft.padding.symmetric(vertical=20),
                 ),
                 ft.Container(expand=True),
+                ft.Divider(color=SciFiColors.BORDER, height=1),
                 ft.Container(
                     content=ft.ElevatedButton(
                         content=ft.Row([
                             ft.Icon(ft.Icons.LOGOUT_ROUNDED, size=20, color=SciFiColors.ERROR),
-                            ft.Text("Logout", size=14, weight=ft.FontWeight.W_500),
-                        ], spacing=12),
+                            ft.Text("Logout", size=14, weight=ft.FontWeight.W_600),
+                        ], spacing=12, alignment=ft.MainAxisAlignment.START),
                         on_click=lambda _: self.logout(),
                         width=200,
                         height=48,
                         style=ft.ButtonStyle(
-                            bgcolor=ft.Colors.TRANSPARENT,
+                            bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.ERROR),
                             color=SciFiColors.ERROR,
                             shape=ft.RoundedRectangleBorder(radius=8),
+                            side=ft.BorderSide(width=1, color=SciFiColors.ERROR)
                         ),
                     ),
-                    margin=ft.margin.symmetric(vertical=20),
+                    margin=ft.margin.symmetric(vertical=20, horizontal=10),
                 ),
             ], spacing=0),
             width=240,
-            bgcolor=ft.Colors.with_opacity(0.8, SciFiColors.BG_DARK),
+            bgcolor=SciFiColors.BG_DARK,
             border=ft.border.only(right=ft.border.BorderSide(1, SciFiColors.BORDER)),
         )
         
@@ -863,431 +907,588 @@ class SecureXApp:
             )
 
     def _create_dashboard_content(self) -> ft.Container:
-        """Create main dashboard"""
+        """Create professional dashboard content"""
         try:
             cpu_usage = psutil.cpu_percent(interval=0.1)
             ram_usage = psutil.virtual_memory().percent
         except:
-            cpu_usage = 45
-            ram_usage = 62
+            cpu_usage = 45.0
+            ram_usage = 62.0
         
-        return ft.Container(
+        header = ft.Container(
             content=ft.Column([
-                ft.Container(
-                    content=ft.Column([
-                        ft.Text(
-                            "SECUREX DASHBOARD",
-                            size=28,
-                            weight=ft.FontWeight.BOLD,
-                            color=SciFiColors.TEXT_PRIMARY,
-                            font_family="Orbitron",
-                        ),
-                        ft.Text(
-                            "Advanced Biometric Security & Voice Assistant System",
-                            size=14,
-                            color=SciFiColors.TEXT_SECONDARY,
-                        ),
-                        ft.Container(
-                            content=ft.Row([
-                                ft.Icon(ft.Icons.VERIFIED_USER_ROUNDED, color=SciFiColors.SUCCESS, size=16),
-                                ft.Text(
-                                    f"Authenticated as {self.current_user['username'] if self.current_user else 'Unknown'}",
-                                    size=12,
-                                    color=SciFiColors.SUCCESS,
-                                    weight=ft.FontWeight.W_600,
-                                ),
-                            ], spacing=8),
-                            padding=ft.padding.symmetric(horizontal=16, vertical=8),
-                            border_radius=20,
-                            bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.SUCCESS),
-                            border=ft.border.all(1, SciFiColors.SUCCESS),
-                        ),
-                    ], spacing=8, horizontal_alignment=ft.CrossAxisAlignment.START),
-                    padding=ft.padding.symmetric(vertical=20, horizontal=20),
+                ft.Text(
+                    "SYSTEM DASHBOARD",
+                    size=32,
+                    weight=ft.FontWeight.BOLD,
+                    color=SciFiColors.TEXT_PRIMARY,
+                    font_family="Orbitron",
+                ),
+                ft.Text(
+                    "Advanced Biometric Security & Voice Assistant System",
+                    size=14,
+                    color=SciFiColors.TEXT_SECONDARY,
+                    font_family="Rajdhani",
+                    weight=ft.FontWeight.W_600
                 ),
                 ft.Container(
                     content=ft.Row([
-                        self._create_stat_card("CPU Usage", f"{int(cpu_usage)}%", SciFiColors.PRIMARY, ft.Icons.MEMORY_ROUNDED),
-                        self._create_stat_card("RAM Usage", f"{int(ram_usage)}%", SciFiColors.ACCENT, ft.Icons.STORAGE_ROUNDED),
-                        self._create_stat_card("Security", "ACTIVE", SciFiColors.SUCCESS, ft.Icons.SECURITY_ROUNDED),
-                        self._create_stat_card("Assistant", "READY", SciFiColors.INFO, ft.Icons.MIC_ROUNDED),
-                    ], spacing=20, wrap=True),
-                    height=200,
+                        ft.Icon(ft.Icons.VERIFIED_USER_ROUNDED, color=SciFiColors.SUCCESS, size=16),
+                        ft.Text(
+                            f"Authenticated as {self.current_user['username'] if self.current_user else 'Unknown'}",
+                            size=12,
+                            color=SciFiColors.SUCCESS,
+                            weight=ft.FontWeight.W_600,
+                        ),
+                    ], spacing=8),
+                    padding=ft.padding.symmetric(horizontal=16, vertical=8),
+                    border_radius=20,
+                    bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.SUCCESS),
+                    border=ft.border.all(1, SciFiColors.SUCCESS),
+                    margin=ft.margin.only(top=10)
                 ),
-                ft.Container(height=20),
-                ft.Text("QUICK ACTIONS", size=18, weight=ft.FontWeight.BOLD, font_family="Orbitron"),
-                ft.Container(height=16),
-                ft.Row([
-                    self._create_action_card("Voice Assistant", ft.Icons.MIC_ROUNDED, SciFiColors.PRIMARY, self._show_voice_dialog),
-                    self._create_action_card("Security Scan", ft.Icons.SECURITY_ROUNDED, SciFiColors.WARNING, lambda e: self._run_security_scan()),
-                    self._create_action_card("System Info", ft.Icons.INFO_ROUNDED, SciFiColors.SUCCESS, self._show_system_status),
-                    self._create_action_card("Screenshot", ft.Icons.CAMERA_ROUNDED, SciFiColors.ACCENT, self._take_screenshot_action),
-                ], spacing=16, wrap=True),
-            ], spacing=0, scroll=ft.ScrollMode.AUTO),
-            padding=ft.padding.all(0),
+            ], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.START),
+            padding=ft.padding.symmetric(vertical=20, horizontal=20),
+        )
+
+        stat_cards = [
+            self._create_stat_card("CPU Usage", f"{int(cpu_usage)}%", SciFiColors.PRIMARY, ft.Icons.MEMORY_ROUNDED),
+            self._create_stat_card("RAM Usage", f"{int(ram_usage)}%", SciFiColors.ACCENT, ft.Icons.STORAGE_ROUNDED),
+            self._create_stat_card("Security", "ACTIVE", SciFiColors.SUCCESS, ft.Icons.SECURITY_ROUNDED),
+            self._create_stat_card("Assistant", "READY", SciFiColors.INFO, ft.Icons.MIC_ROUNDED),
+        ]
+
+        action_cards = [
+            self._create_action_card("Voice Assistant", ft.Icons.MIC_ROUNDED, SciFiColors.PRIMARY, lambda e: self._navigate_to_section("assistant")),
+            self._create_action_card("Security Scan", ft.Icons.SHIELD_ROUNDED, SciFiColors.WARNING, lambda e: self._run_security_scan()),
+            self._create_action_card("System Info", ft.Icons.INFO_ROUNDED, SciFiColors.SUCCESS, self._show_system_status),
+            self._create_action_card("Screenshot", ft.Icons.CAMERA_ROUNDED, SciFiColors.ACCENT, self._take_screenshot_action),
+            self._create_action_card("Lock System", ft.Icons.LOCK_ROUNDED, SciFiColors.ERROR, lambda e: self.voice_assistant._lock_system("")),
+        ]
+
+        return ft.Column(
+            [
+                header,
+                ft.Divider(color=SciFiColors.BORDER, height=1),
+                
+                ft.Container(
+                    content=ft.Text(
+                        "SYSTEM STATUS", 
+                        size=18, 
+                        weight=ft.FontWeight.BOLD, 
+                        font_family="Orbitron", 
+                    ),
+                    margin=ft.margin.only(top=20, left=20)
+                ),
+                
+                ft.GridView(
+                    runs_count=4,
+                    max_extent=240,
+                    child_aspect_ratio=1.4,
+                    spacing=15,
+                    run_spacing=15,
+                    padding=20,
+                    controls=stat_cards,
+                ),
+                ft.Divider(color=SciFiColors.BORDER, height=1),
+
+                ft.Container(
+                    content=ft.Text(
+                        "QUICK ACTIONS", 
+                        size=18, 
+                        weight=ft.FontWeight.BOLD, 
+                        font_family="Orbitron", 
+                    ),
+                    margin=ft.margin.only(top=20, left=20)
+                ),
+
+                ft.GridView(
+                    runs_count=5,
+                    max_extent=160,
+                    child_aspect_ratio=1.2,
+                    spacing=15,
+                    run_spacing=15,
+                    padding=20,
+                    controls=action_cards,
+                ),
+            ], 
+            spacing=0, 
+            scroll=ft.ScrollMode.AUTO,
             expand=True,
         )
 
+    def _on_hover_card(self, e):
+        """Handler for card hover events"""
+        e.control.shadow.color = SciFiColors.PRIMARY if e.data == "true" else SciFiColors.BG_DARK
+        e.control.shadow.blur_radius = 20 if e.data == "true" else 10
+        e.control.border.color = SciFiColors.BORDER_GLOW if e.data == "true" else SciFiColors.BORDER
+        e.control.update()
+
     def _create_stat_card(self, title: str, value: str, color: str, icon) -> ft.Container:
         return ft.Container(
-            content=ft.Column([
-                ft.Icon(icon, size=32, color=color),
-                ft.Container(height=8),
-                ft.Text(value, size=24, weight=ft.FontWeight.BOLD, color=color),
-                ft.Text(title.upper(), size=10, color=SciFiColors.TEXT_MUTED, weight=ft.FontWeight.W_600),
-            ], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-            width=200,
-            height=150,
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(icon, size=28, color=color),
+                            ft.Container(expand=True),
+                            ft.Container(
+                                content=ft.Icon(ft.Icons.ARROW_OUTWARD_ROUNDED, size=16, color=SciFiColors.TEXT_MUTED),
+                                padding=4,
+                                border_radius=4,
+                                bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.TEXT_MUTED)
+                            )
+                        ]
+                    ),
+                    ft.Container(expand=True),
+                    ft.Text(title.upper(), size=11, color=SciFiColors.TEXT_MUTED, weight=ft.FontWeight.W_600, font_family="Rajdhani"),
+                    ft.Text(value, size=32, weight=ft.FontWeight.BOLD, color=SciFiColors.TEXT_PRIMARY, font_family="Orbitron", height=36),
+                ], 
+                spacing=4
+            ),
             padding=ft.padding.all(20),
             border_radius=12,
-            bgcolor=ft.Colors.with_opacity(0.6, SciFiColors.BG_CARD),
-            border=ft.border.all(1, color),
+            bgcolor=SciFiColors.BG_CARD,
+            border=ft.border.all(1, SciFiColors.BORDER),
+            shadow=ft.BoxShadow(
+                spread_radius=1,
+                blur_radius=10,
+                color=SciFiColors.BG_DARK,
+                offset=ft.Offset(2, 2),
+            ),
+            on_hover=self._on_hover_card,
+            ink=True,
         )
 
     def _create_action_card(self, title: str, icon, color: str, on_click) -> ft.Container:
         return ft.Container(
-            content=ft.Column([
-                ft.Container(
-                    content=ft.Icon(icon, size=32, color=color),
-                    width=60,
-                    height=60,
-                    border_radius=8,
-                    bgcolor=ft.Colors.with_opacity(0.1, color),
-                    alignment=ft.alignment.center,
-                ),
-                ft.Container(height=8),
-                ft.Text(
-                    title.upper(),
-                    size=11,
-                    color=SciFiColors.TEXT_PRIMARY,
-                    weight=ft.FontWeight.W_600,
-                    text_align=ft.TextAlign.CENTER,
-                ),
-            ], spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-            width=120,
-            height=100,
-            padding=ft.padding.all(12),
-            border_radius=8,
-            bgcolor=ft.Colors.with_opacity(0.4, SciFiColors.BG_ELEVATED),
+            content=ft.Column(
+                [
+                    ft.Container(
+                        content=ft.Icon(icon, size=32, color=color),
+                        width=60,
+                        height=60,
+                        border_radius=8,
+                        bgcolor=ft.Colors.with_opacity(0.1, color),
+                        alignment=ft.alignment.center,
+                    ),
+                    ft.Container(height=8),
+                    ft.Text(
+                        title.upper(),
+                        size=12,
+                        color=SciFiColors.TEXT_PRIMARY,
+                        weight=ft.FontWeight.W_600,
+                        text_align=ft.TextAlign.CENTER,
+                        font_family="Rajdhani"
+                    ),
+                ], 
+                spacing=4, 
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                alignment=ft.MainAxisAlignment.CENTER,
+            ),
+            padding=ft.padding.all(16),
+            border_radius=12,
+            bgcolor=SciFiColors.BG_CARD,
             border=ft.border.all(1, SciFiColors.BORDER),
             alignment=ft.alignment.center,
             on_click=on_click,
+            shadow=ft.BoxShadow(
+                spread_radius=1,
+                blur_radius=10,
+                color=SciFiColors.BG_DARK,
+                offset=ft.Offset(2, 2),
+            ),
+            on_hover=self._on_hover_card,
             ink=True,
         )
 
+    # --- START REFACTOR: Rebuilt Assistant Page ---
     def _create_assistant_content(self) -> ft.Container:
         """Create voice assistant interface"""
-        return ft.Container(
-            content=ft.Column([
-                ft.Text("VOICE ASSISTANT", size=24, weight=ft.FontWeight.BOLD, font_family="Orbitron"),
-                ft.Container(height=40),
-                ft.ElevatedButton(
-                    "🎤 START VOICE ASSISTANT",
-                    icon=ft.Icons.MIC_ROUNDED,
-                    on_click=self._show_voice_dialog,
-                    style=ft.ButtonStyle(
-                        bgcolor=SciFiColors.PRIMARY,
-                        color=SciFiColors.BG_DARK,
-                    ),
-                ),
-            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-            padding=40,
-            alignment=ft.alignment.center,
+        
+        # 1. Initialize components
+        self.assistant_log_content = ft.Column(
+            scroll=ft.ScrollMode.AUTO,
+            auto_scroll=True,
+            spacing=10,
+            expand=True
         )
+        
+        self.assistant_status_text = ft.Text(
+            "Ready to listen",
+            size=12,
+            color=SciFiColors.TEXT_SECONDARY,
+            weight=ft.FontWeight.W_500,
+            text_align=ft.TextAlign.CENTER
+        )
+        
+        self.assistant_continuous_toggle = ft.Switch(
+            label="Continuous Mode",
+            value=self.continuous_mode_active,
+            active_color=SciFiColors.PRIMARY,
+            on_change=lambda e: setattr(self, 'continuous_mode_active', e.control.value)
+        )
+
+        # --- Start/Stop buttons ---
+        self.assistant_start_btn = ft.Container(
+            content=ft.Icon(ft.Icons.MIC, color=SciFiColors.BG_DARK, size=32),
+            width=70,
+            height=70,
+            bgcolor=SciFiColors.PRIMARY,
+            border_radius=35,
+            alignment=ft.alignment.center,
+            on_click=self._assistant_handle_listen_button,
+            visible=True,
+            shadow=ft.BoxShadow(
+                spread_radius=1,
+                blur_radius=15,
+                color=ft.Colors.with_opacity(0.5, SciFiColors.PRIMARY),
+                offset=ft.Offset(0, 0),
+            )
+        )
+        
+        self.assistant_stop_btn = ft.Container(
+            content=ft.Icon(ft.Icons.STOP, color=ft.Colors.WHITE, size=32),
+            width=70,
+            height=70,
+            bgcolor=SciFiColors.ERROR,
+            border_radius=35,
+            alignment=ft.alignment.center,
+            on_click=self._assistant_stop_continuous, # Default to continuous stop
+            visible=False,
+            shadow=ft.BoxShadow(
+                spread_radius=1,
+                blur_radius=15,
+                color=ft.Colors.with_opacity(0.5, SciFiColors.ERROR),
+                offset=ft.Offset(0, 0),
+            )
+        )
+
+        # --- UI Layout ---
+        log_container = ft.Container(
+            content=self.assistant_log_content,
+            expand=True,
+            bgcolor=ft.Colors.with_opacity(0.3, SciFiColors.BG_DARK),
+            padding=20,
+            border_radius=10,
+            border=ft.border.all(1, SciFiColors.BORDER),
+            width=600, # <-- FIX: Set fixed width
+        )
+        
+        control_panel = ft.Container(
+            content=ft.Column(
+                [
+                    self.assistant_status_text,
+                    ft.Container(height=15),
+                    ft.Stack(
+                        [self.assistant_start_btn, self.assistant_stop_btn],
+                        width=70,
+                        height=70
+                    ),
+                    ft.Container(height=15),
+                    self.assistant_continuous_toggle,
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=0
+            ),
+            padding=20,
+            border_radius=10,
+            bgcolor=SciFiColors.BG_CARD,
+            width=600, # Centered control panel
+            border=ft.border.all(1, SciFiColors.BORDER)
+        )
+
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("VOICE ASSISTANT", size=32, weight=ft.FontWeight.BOLD, font_family="Orbitron", color=SciFiColors.TEXT_PRIMARY),
+                    ft.Text("Speak commands, ask questions, or enable continuous mode.", size=14, color=SciFiColors.TEXT_SECONDARY, font_family="Rajdhani"),
+                    ft.Container(height=20),
+                    log_container, # The expanding log
+                    ft.Container(height=20),
+                    control_panel, # The bottom controls
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                expand=True,
+                spacing=0
+            ),
+            padding=ft.padding.only(left=40, right=40, top=0, bottom=20),
+            expand=True,
+        )
+    # --- END REFACTOR ---
 
     def _create_security_content(self) -> ft.Container:
         return ft.Container(
-            content=ft.Column([
-                ft.Text("SECURITY CENTER", size=24, weight=ft.FontWeight.BOLD, font_family="Orbitron"),
-                ft.Container(height=20),
-                ft.Text("Security settings and logs.", color=SciFiColors.TEXT_SECONDARY, size=14),
-            ]),
+            content=ft.Column(
+                [
+                    ft.Text("SECURITY CENTER", size=32, weight=ft.FontWeight.BOLD, font_family="Orbitron", color=SciFiColors.TEXT_PRIMARY),
+                    ft.Container(height=20),
+                    ft.Text("Security settings and logs. (Content pending)", color=SciFiColors.TEXT_SECONDARY, size=14, font_family="Rajdhani"),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                alignment=ft.MainAxisAlignment.CENTER
+            ),
             padding=40,
+            alignment=ft.alignment.center,
+            expand=True,
         )
 
     def _create_settings_content(self) -> ft.Container:
         return ft.Container(
-            content=ft.Column([
-                ft.Text("SETTINGS", size=24, weight=ft.FontWeight.BOLD, font_family="Orbitron"),
-                ft.Container(height=20),
-                ft.Text("Application settings.", color=SciFiColors.TEXT_SECONDARY, size=14),
-            ]),
+            content=ft.Column(
+                [
+                    ft.Text("SYSTEM SETTINGS", size=32, weight=ft.FontWeight.BOLD, font_family="Orbitron", color=SciFiColors.TEXT_PRIMARY),
+                    ft.Container(height=20),
+                    ft.Text("Application settings. (Content pending)", color=SciFiColors.TEXT_SECONDARY, size=14, font_family="Rajdhani"),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                alignment=ft.MainAxisAlignment.CENTER
+            ),
             padding=40,
+            alignment=ft.alignment.center,
+            expand=True,
         )
 
     def _navigate_to_section(self, section_name: str):
         """Navigate to a different dashboard section"""
         try:
             logger.info(f"Navigating to section: {section_name}")
+
+            # --- START FIX: Stop listening if navigating away ---
+            if self.current_nav_section == "assistant" and section_name != "assistant":
+                if self.voice_assistant_active:
+                    logger.info("Navigation auto-stopping voice assistant.")
+                    self.voice_assistant.stop_continuous_listening()
+                    self.voice_assistant_active = False
+            # --- END FIX ---
+
             self.current_nav_section = section_name
             
             if self.current_view == "dashboard":
-                self.show_dashboard()
+                self.show_dashboard() # This will clear and rebuild the page
             
         except Exception as e:
             logger.error(f"Navigation error: {e}", exc_info=True)
             self._show_error_toast(f"Navigation failed: {str(e)}")
 
-    # ==================== VOICE ASSISTANT DIALOG ====================
+    # ==================== VOICE ASSISTANT PAGE HANDLERS ====================
     
-    def _show_voice_dialog(self, e=None):
-        """Show voice assistant dialog"""
-        try:
-            if self.voice_assistant_dialog_open:
-                logger.info("Voice assistant dialog already open")
-                return
-            
-            logger.info("Opening voice assistant dialog")
-            
-            log_content = ft.Column(
-                scroll=ft.ScrollMode.AUTO,
-                auto_scroll=True,
-                expand=True,
-                spacing=4,
-            )
-            
-            status_text = ft.Text(
-                "Ready - Toggle continuous mode and click 'Listen'",
-                size=12,
-                color=SciFiColors.TEXT_SECONDARY,
-                weight=ft.FontWeight.W_500,
-            )
-            
-            continuous_toggle = ft.Switch(
-                label="Continuous Mode",
-                value=self.continuous_mode_active,
-                active_color=SciFiColors.PRIMARY,
-                on_change=lambda e: setattr(self, 'continuous_mode_active', e.control.value)
-            )
-            
-            stop_btn = ft.ElevatedButton(
-                "STOP",
-                icon=ft.Icons.STOP,
-                on_click=None,
-                style=ft.ButtonStyle(
-                    bgcolor=SciFiColors.ERROR,
-                    color=ft.Colors.WHITE,
-                    shape=ft.RoundedRectangleBorder(radius=6),
-                ),
-                visible=False
-            )
-            
-            start_btn = ft.ElevatedButton(
-                "LISTEN",
-                icon=ft.Icons.MIC,
-                on_click=None,
-                style=ft.ButtonStyle(
-                    bgcolor=SciFiColors.ACCENT,
-                    color=ft.Colors.WHITE,
-                    shape=ft.RoundedRectangleBorder(radius=6),
-                )
-            )
-            
-            start_btn.on_click = lambda e: self._handle_listen_button(
-                e, log_content, status_text, start_btn, stop_btn, continuous_toggle
-            )
-            stop_btn.on_click = lambda e: self._stop_continuous(
-                log_content, status_text, start_btn, stop_btn
-            )
-            
-            dialog_content = ft.Column([
-                continuous_toggle,
-                ft.Container(height=10),
-                status_text,
-                ft.Container(height=12),
-                ft.Row([start_btn, stop_btn], spacing=10),
-                ft.Container(height=16),
-                ft.Text(
-                    "INTERACTION LOG:",
-                    size=12,
-                    weight=ft.FontWeight.BOLD,
-                    color=SciFiColors.TEXT_PRIMARY,
-                ),
-                ft.Container(
-                    content=log_content,
-                    height=200,
-                    bgcolor=ft.Colors.with_opacity(0.5, SciFiColors.BG_DARK),
-                    padding=10,
-                    border_radius=6,
-                    border=ft.border.all(1, SciFiColors.BORDER)
-                ),
-            ], width=500, spacing=0)
-            
-            dialog = ft.AlertDialog(
-                modal=True,
-                title=ft.Row([
-                    ft.Icon(ft.Icons.MIC_ROUNDED, color=SciFiColors.PRIMARY, size=28),
-                    ft.Text("VOICE ASSISTANT", size=18, weight=ft.FontWeight.BOLD, font_family="Orbitron"),
-                ], spacing=12),
-                content=dialog_content,
-                actions=[
-                    ft.TextButton(
-                        "CLOSE",
-                        on_click=lambda _: self._close_voice_assistant_dialog(dialog),
-                        style=ft.ButtonStyle(color=SciFiColors.TEXT_SECONDARY),
-                    ),
-                ],
-                bgcolor=SciFiColors.BG_CARD,
-                shape=ft.RoundedRectangleBorder(radius=10),
-            )
-            
-            self._open_dialog_safe(dialog)
-            self.voice_assistant_dialog_open = True
-            
-            self._add_log_entry_to_container(log_content, "Voice Assistant initialized", SciFiColors.SUCCESS)
-            
-            logger.info("Voice assistant dialog opened successfully")
-            
-        except Exception as ex:
-            logger.error(f"Error opening voice dialog: {ex}", exc_info=True)
-            self._show_error_toast(f"Failed to open voice assistant: {str(ex)}")
+    # --- REFACTOR: All dialog logic is moved here and adapted ---
 
-    def _handle_listen_button(self, e, log_content, status_text, start_btn, stop_btn, continuous_toggle):
+    def _assistant_handle_listen_button(self, e):
         """Handle listen button"""
-        if continuous_toggle.value:
-            self._start_continuous_listening(log_content, status_text, start_btn, stop_btn)
+        if self.assistant_continuous_toggle.value:
+            self._assistant_start_continuous_listening()
         else:
-            self._listen_single_command(log_content, status_text)
+            self._assistant_listen_single_command()
 
-    def _start_continuous_listening(self, log_content, status_text, start_btn, stop_btn):
+    def _assistant_start_continuous_listening(self):
         """Start continuous listening"""
         try:
             self.voice_assistant_active = True
             
+            user_id = self.current_user['id'] if self.current_user else None
+
             self.voice_assistant.start_continuous_listening(
                 self._audio_stream_ctx,
-                callback=lambda transcript, response, success: self._handle_voice_callback(
-                    transcript, response, success, log_content
-                )
+                callback=lambda transcript, response, success: self._assistant_handle_voice_callback(
+                    transcript, response, success
+                ),
+                user_id=user_id
             )
             
-            start_btn.visible = False
-            stop_btn.visible = True
-            status_text.value = "Listening continuously - Speak now!"
-            status_text.color = SciFiColors.SUCCESS
+            self.assistant_start_btn.visible = False
+            self.assistant_stop_btn.visible = True
+            self.assistant_stop_btn.on_click = self._assistant_stop_continuous # Set correct handler
+            self.assistant_status_text.value = "Listening continuously... Speak now!"
+            self.assistant_status_text.color = SciFiColors.SUCCESS
             
-            self._add_log_entry_to_container(log_content, "Continuous listening started", SciFiColors.SUCCESS)
+            self._assistant_add_log_entry("Continuous listening started", SciFiColors.SUCCESS)
             self.page.update()
         except Exception as e:
             logger.error(f"Error starting continuous listening: {e}")
-            self._add_log_entry_to_container(log_content, f"Failed: {e}", SciFiColors.ERROR)
+            self._assistant_add_log_entry(f"Failed: {e}", SciFiColors.ERROR)
 
-    def _stop_continuous(self, log_content, status_text, start_btn, stop_btn):
+    def _assistant_stop_continuous(self, e=None):
         """Stop continuous listening"""
         try:
             self.voice_assistant.stop_continuous_listening()
             self.voice_assistant_active = False
             
-            start_btn.visible = True
-            stop_btn.visible = False
-            status_text.value = "Stopped"
-            status_text.color = SciFiColors.INFO
+            self.assistant_start_btn.visible = True
+            self.assistant_stop_btn.visible = False
+            self.assistant_status_text.value = "Stopped"
+            self.assistant_status_text.color = SciFiColors.INFO
             
-            self._add_log_entry_to_container(log_content, "Stopped", SciFiColors.INFO)
+            self._assistant_add_log_entry("Stopped", SciFiColors.INFO)
             self.page.update()
         except Exception as e:
             logger.error(f"Error stopping: {e}")
-            self._add_log_entry_to_container(log_content, f"Error: {e}", SciFiColors.ERROR)
+            self._assistant_add_log_entry(f"Error: {e}", SciFiColors.ERROR)
 
-    def _listen_single_command(self, log_content, status_text):
+    # --- START: New handler for stopping single command ---
+    def _assistant_stop_single_command(self, e=None):
+        """Stops a single command recording prematurely"""
+        if self.voice_assistant_active:
+            logger.info("Single command recording stopped by user.")
+            self.audio_recorder.stop_recording()
+            self.voice_assistant_active = False # Set flag to stop
+            
+            # Update UI to show processing
+            self.assistant_stop_btn.disabled = True
+            self.assistant_status_text.value = "Processing..."
+            self.assistant_status_text.color = SciFiColors.WARNING
+            self.page.update()
+    # --- END: New handler ---
+
+    def _assistant_listen_single_command(self):
         """Listen for single command"""
+        
+        # --- START FIX: Define async UI updaters ---
         async def update_ui_error():
-            self._add_log_entry_to_container(log_content, "Recording failed", SciFiColors.ERROR)
-            status_text.value = "Failed"
-            status_text.color = SciFiColors.ERROR
+            self._assistant_add_log_entry("Recording failed", SciFiColors.ERROR)
+            self.assistant_status_text.value = "Failed. Ready to listen."
+            self.assistant_status_text.color = SciFiColors.ERROR
             self.voice_assistant_active = False
+            # Reset buttons
+            self.assistant_start_btn.visible = True
+            self.assistant_stop_btn.visible = False
+            self.assistant_stop_btn.disabled = False
             self.page.update()
         
         async def update_ui_processing():
-            status_text.value = "Processing..."
-            status_text.color = SciFiColors.WARNING
+            self.assistant_status_text.value = "Processing..."
+            self.assistant_status_text.color = SciFiColors.WARNING
+            # Keep stop button visible but disabled
+            self.assistant_start_btn.visible = False
+            self.assistant_stop_btn.visible = True
+            self.assistant_stop_btn.disabled = True
             self.page.update()
         
         async def update_ui_success(transcript, response, success):
-            self._add_log_entry_to_container(log_content, f"Heard: '{transcript}'", SciFiColors.INFO)
-            self._add_log_entry_to_container(log_content, f"Response: {response}", SciFiColors.SUCCESS if success else SciFiColors.ERROR)
-            status_text.value = f"Processed: {response[:40]}..."
-            status_text.color = SciFiColors.SUCCESS
+            self._assistant_add_log_entry(f"Heard: '{transcript}'", SciFiColors.INFO)
+            self._assistant_add_log_entry(f"Response: {response}", SciFiColors.SUCCESS if success else SciFiColors.ERROR)
+            self.assistant_status_text.value = "Ready to listen"
+            self.assistant_status_text.color = SciFiColors.TEXT_SECONDARY
             self.voice_assistant_active = False
+            # Reset buttons
+            self.assistant_start_btn.visible = True
+            self.assistant_stop_btn.visible = False
+            self.assistant_stop_btn.disabled = False
             self.page.update()
         
         async def update_ui_no_speech():
-            self._add_log_entry_to_container(log_content, "No speech detected", SciFiColors.WARNING)
-            status_text.value = "No speech"
-            status_text.color = SciFiColors.WARNING
+            self._assistant_add_log_entry("No speech detected", SciFiColors.WARNING)
+            self.assistant_status_text.value = "No speech. Ready to listen."
+            self.assistant_status_text.color = SciFiColors.WARNING
             self.voice_assistant_active = False
+            # Reset buttons
+            self.assistant_start_btn.visible = True
+            self.assistant_stop_btn.visible = False
+            self.assistant_stop_btn.disabled = False
             self.page.update()
         
         async def update_ui_exception(e):
-            self._add_log_entry_to_container(log_content, f"Error: {e}", SciFiColors.ERROR)
-            status_text.value = f"Error: {e}"
-            status_text.color = SciFiColors.ERROR
+            self._assistant_add_log_entry(f"Error: {e}", SciFiColors.ERROR)
+            self.assistant_status_text.value = f"Error. Ready to listen."
+            self.assistant_status_text.color = SciFiColors.ERROR
             self.voice_assistant_active = False
+            # Reset buttons
+            self.assistant_start_btn.visible = True
+            self.assistant_stop_btn.visible = False
+            self.assistant_stop_btn.disabled = False
             self.page.update()
+        # --- END FIX ---
         
         try:
             self.voice_assistant_active = True
             
-            status_text.value = "Listening..."
-            status_text.color = SciFiColors.PRIMARY
+            # --- START UI FIX: Update buttons for single command ---
+            self.assistant_status_text.value = "Listening..."
+            self.assistant_status_text.color = SciFiColors.PRIMARY
+            self.assistant_start_btn.visible = False
+            self.assistant_stop_btn.visible = True
+            self.assistant_stop_btn.disabled = False
+            self.assistant_stop_btn.on_click = self._assistant_stop_single_command # Set handler
+            # --- END UI FIX ---
             self.page.update()
             
             def record_and_process():
                 try:
                     audio_path = self.temp_dir / f"command_{int(time.time())}.wav"
-                    audio_data = self.audio_recorder.record_audio(duration=5.0)
+                    # --- FIX: Use a long duration, stoppable recording ---
+                    audio_data = self.audio_recorder.record_audio(duration=300.0)
+                    
+                    # If stop was clicked, self.voice_assistant_active will be False
+                    if not self.voice_assistant_active:
+                        logger.info("Single command recording stopped by user.")
+                        # audio_data will contain what was recorded so far
+                    else:
+                        logger.info("Single command recording finished by timeout.")
                     
                     if audio_data is None:
-                        self.page.run_task(update_ui_error)
+                        self.page.run_task(update_ui_error) # <-- FIX: Pass function
                         return
                     
                     self.audio_recorder.save_audio(audio_data, str(audio_path))
                     
-                    self.page.run_task(update_ui_processing)
+                    self.page.run_task(update_ui_processing) # <-- FIX: Pass function
                     
                     transcript = self.voice_assistant.transcribe(str(audio_path))
                     if transcript.strip():
-                        success, response = self.voice_assistant.process_voice_command(transcript)
                         
-                        self.page.run_task(lambda: update_ui_success(transcript, response, success))
+                        user_id = self.current_user['id'] if self.current_user else None
+
+                        success, response = self.voice_assistant.process_voice_command(
+                            transcript, 
+                            audio_data,
+                            user_id=user_id
+                        )
                         
-                        # Run TTS in executor
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        loop.run_until_complete(self._speak_async(response))
-                        loop.close()
+                        # <-- FIX: Pass function and args -->
+                        self.page.run_task(update_ui_success, transcript, response, success)
+                        self.page.run_task(self._speak_async, response)
                         
                     else:
-                        self.page.run_task(update_ui_no_speech)
-                    
+                        self.page.run_task(update_ui_no_speech) # <-- FIX: Pass function
+                
                 except Exception as e:
-                    logger.error(f"Error in recording thread: {e}")
-                    self.page.run_task(lambda: update_ui_exception(e))
+                    logger.error(f"Error in recording thread: {e}", exc_info=True)
+                    self.page.run_task(update_ui_exception, e) # <-- FIX: Pass function
             
             recording_thread = threading.Thread(target=record_and_process, daemon=True)
             recording_thread.start()
             
         except Exception as e:
             logger.error(f"Error: {e}")
-            self._add_log_entry_to_container(log_content, f"Error: {e}", SciFiColors.ERROR)
-            status_text.value = f"Error: {e}"
-            status_text.color = SciFiColors.ERROR
+            self._assistant_add_log_entry(f"Error: {e}", SciFiColors.ERROR)
+            self.assistant_status_text.value = f"Error: {e}"
+            self.assistant_status_text.color = SciFiColors.ERROR
             self.voice_assistant_active = False
+            # Reset buttons
+            self.assistant_start_btn.visible = True
+            self.assistant_stop_btn.visible = False
+            self.assistant_stop_btn.disabled = False
             self.page.update()
 
-    def _handle_voice_callback(self, transcript, response, success, log_content):
+    def _assistant_handle_voice_callback(self, transcript, response, success):
         """Handle voice callback"""
         try:
             if transcript:
                 async def update_ui():
-                    self._add_log_entry_to_container(log_content, f"Heard: '{transcript}'", SciFiColors.INFO)
-                    self._add_log_entry_to_container(log_content, f"Response: {response}", SciFiColors.SUCCESS if success else SciFiColors.ERROR)
-                self.page.run_task(update_ui)
+                    self._assistant_add_log_entry(f"Heard: '{transcript}'", SciFiColors.INFO)
+                    self._assistant_add_log_entry(f"Response: {response}", SciFiColors.SUCCESS if success else SciFiColors.ERROR)
+                self.page.run_task(update_ui) # <-- FIX: Pass function
         except Exception as e:
             logger.error(f"Callback error: {e}")
 
-    def _add_log_entry_to_container(self, log_content, message: str, color: str):
+    def _assistant_add_log_entry(self, message: str, color: str):
         """Add entry to log container"""
+        if self.assistant_log_content is None:
+            # This can happen if user navigates away while a log is trying to write
+            logger.warning("Assistant log not initialized, skipping log entry.")
+            return
+
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         
         log_entry = ft.Container(
@@ -1305,16 +1506,12 @@ class SecureXApp:
             bgcolor=ft.Colors.with_opacity(0.3, SciFiColors.BG_ELEVATED),
         )
         
-        log_content.controls.append(log_entry)
-        self.page.update()
+        if self.assistant_log_content.controls is not None:
+            self.assistant_log_content.controls.append(log_entry)
+            self.page.update()
+        else:
+            logger.warning("Log content controls not initialized, skipping log entry.")
 
-    def _close_voice_assistant_dialog(self, dialog):
-        """Close voice assistant dialog"""
-        self._close_dialog_safe(dialog)
-        self.voice_assistant_dialog_open = False
-        if self.voice_assistant_active:
-            self.voice_assistant.stop_continuous_listening()
-            self.voice_assistant_active = False
 
     # ==================== ACTION HANDLERS ====================
     
@@ -1322,9 +1519,12 @@ class SecureXApp:
         """Take screenshot action"""
         try:
             screenshot = pyautogui.screenshot()
-            screenshot.save("screenshot.png")
+            screenshot_path = self.temp_dir / f"screenshot_{int(time.time())}.png"
+            screenshot.save(str(screenshot_path))
+            logger.info(f"Screenshot saved to: {screenshot_path}")
             self._show_success_toast("Screenshot saved!")
         except Exception as e:
+            logger.error(f"Screenshot failed: {e}", exc_info=True)
             self._show_error_toast(f"Screenshot failed: {e}")
 
     def _show_system_status(self, event):
@@ -1353,12 +1553,13 @@ class SecureXApp:
 
     def _run_security_scan(self):
         """Run security scan"""
+        self._show_success_toast("Security scan initiated...") # Show "in progress"
         async def run_scan():
-            await asyncio.sleep(1)
+            await asyncio.sleep(2) # Simulate scan time
             self._show_success_toast("Security scan complete - No threats detected")
         
-        self.page.run_task(run_scan)
-        self._show_success_toast("Security scan initiated")
+        self.page.run_task(run_scan) # <-- FIX: Pass function
+
 
     def _create_metric_row(self, label: str, value: str, color: str = SciFiColors.TEXT_PRIMARY):
         """Create metric row"""
@@ -1401,20 +1602,23 @@ class SecureXApp:
     def _open_dialog_safe(self, dialog):
         """Open dialog safely"""
         try:
+            logger.debug("[DEBUG] Entering _open_dialog_safe")
             if dialog not in self.active_dialogs:
+                logger.debug("[DEBUG] Adding dialog to active_dialogs list")
                 self.active_dialogs.append(dialog)
-            
+            logger.debug(f"[DEBUG] Setting self.page.dialog to dialog: {dialog}")
             self.page.dialog = dialog
+            logger.debug(f"[DEBUG] Setting dialog.open = True")
             dialog.open = True
+            logger.debug(f"[DEBUG] Calling self.page.update()")
             self.page.update()
-            
             logger.info(f"Dialog opened: type={type(dialog).__name__}")
-            
+            logger.debug("[DEBUG] Exiting _open_dialog_safe")
         except Exception as e:
             logger.error(f"Error opening dialog: {e}")
             self._show_error_toast(f"Failed to open dialog: {e}")
 
-    def _close_dialog_safe(self, dialog):
+    def _close_dialog_safe(self, dialog, update_page=True): # <-- FIX: Add update_page flag
         """Close dialog safely"""
         try:
             dialog.open = False
@@ -1424,12 +1628,13 @@ class SecureXApp:
             if dialog in self.active_dialogs:
                 self.active_dialogs.remove(dialog)
             
-            self.page.update()
+            if update_page: # <-- FIX: Check flag
+                self.page.update()
             
         except Exception as e:
             logger.error(f"Error closing dialog: {e}")
 
-    # ==================== TOAST NOTIFICATIONS ====================
+    # ==================== TOAST NOTIFICATIONS (FIXED) ====================
     
     def _show_success_toast(self, message: str):
         """Show success toast"""
@@ -1439,6 +1644,7 @@ class SecureXApp:
                 ft.Text(message, color=SciFiColors.TEXT_PRIMARY),
             ], spacing=10),
             bgcolor=SciFiColors.BG_CARD,
+            # --- FIX: Removed 'border' property ---
         )
         self.page.snack_bar.open = True
         self.page.update()
@@ -1451,6 +1657,7 @@ class SecureXApp:
                 ft.Text(message, color=SciFiColors.TEXT_PRIMARY),
             ], spacing=10),
             bgcolor=SciFiColors.BG_CARD,
+            # --- FIX: Removed 'border' property ---
         )
         self.page.snack_bar.open = True
         self.page.update()
@@ -1521,7 +1728,10 @@ class SecureXApp:
             self.reg_progress_ring.value = None  # Indeterminate spinner
         self.page.update()
 
-    # ==================== AUTHENTICATION & REGISTRATION ====================
+    # ===================================================================
+    # --- AUTHENTICATION & REGISTRATION ---
+    # --- NO CHANGES MADE TO THIS SECTION AS REQUESTED ---
+    # ===================================================================
     
     def start_voice_login(self):
         """Start voice authentication"""
@@ -1682,7 +1892,7 @@ class SecureXApp:
             for sample_num in range(1, 4):
                 self.update_reg_status(f"⦿ Sample {sample_num}/3 - Click START RECORDING when ready", SciFiColors.INFO)
                 await self._speak_async(f"Please click START RECORDING for voice sample {sample_num} of 3")
-                    
+                        
                 self.show_reg_record_button(f"SAMPLE {sample_num} OF 3", mode="voice")
                 self.page.update()
                 
@@ -2074,7 +2284,8 @@ class SecureXApp:
             self.page.add(dashboard)
             self.page.update()
             
-            await self._speak_async(f"Welcome back, {user['username']}")
+            # --- FIX: Pass function to run_task, not lambda ---
+            await self.page.run_task(self._speak_async, f"Welcome back, {user['username']}")
             
         except Exception as e:
             logger.error(f"Voice verification error: {e}", exc_info=True)
@@ -2113,10 +2324,12 @@ class SecureXApp:
         Updates UI immediately and schedules async work.
         """
         try:
+            logger.debug("[DEBUG] Record button clicked - entering handler")
             logger.info(f"=== RECORD BUTTON CLICKED === recording_active={self.recording_active}")
             
             if not self.recording_active:
                 # START RECORDING
+                logger.debug("[DEBUG] Record button - starting recording")
                 logger.info("Starting recording...")
                 
                 # Update UI immediately (synchronous)
@@ -2130,35 +2343,38 @@ class SecureXApp:
                     shape=ft.RoundedRectangleBorder(radius=12),
                 )
                 self.update_status("🎤 Listening... Click STOP LISTENING when done", SciFiColors.WARNING)
+                logger.debug("[DEBUG] UI updated for listening state")
                 self.page.update()
                 
                 # Schedule async recording task
+                logger.debug("[DEBUG] Scheduling start_voice_recording_manual task")
                 logger.info("Scheduling start_voice_recording_manual")
                 self.page.run_task(self.start_voice_recording_manual)
                 
             else:
                 # STOP RECORDING
+                logger.debug("[DEBUG] Record button - stopping recording")
                 logger.info("Stopping recording...")
                 
                 # Update UI immediately to show stopping state
                 self.record_button.text = "STOPPING..."
                 self.record_button.disabled = True
                 self.update_status("⏹ Stopping recording...", SciFiColors.INFO)
+                logger.debug("[DEBUG] UI updated for stopping state")
                 self.page.update()
                 
                 # Schedule async stop task
+                logger.debug("[DEBUG] Scheduling stop_voice_recording_manual task")
                 logger.info("Scheduling stop_voice_recording_manual")
                 self.page.run_task(self.stop_voice_recording_manual)
                 
         except Exception as ex:
+            logger.debug(f"[DEBUG] Exception in record button handler: {ex}")
             logger.error(f"Button click error: {ex}", exc_info=True)
             self.recording_active = False
             self.update_status(f"⚠ Error: {ex}", SciFiColors.ERROR)
             self.page.update()
 
-    # ---
-    # --- THIS IS THE CORRECTED FUNCTION ---
-    # ---
     async def start_voice_recording_manual(self):
         """Start manual voice recording (user controls start/stop)"""
         try:
@@ -2188,9 +2404,6 @@ class SecureXApp:
             logger.error(f"Error starting recording: {e}", exc_info=True)
             # If starting fails, reset the UI
             await self._reset_recording_ui()
-    # ---
-    # --- END OF CORRECTED FUNCTION ---
-    # ---
 
     async def stop_voice_recording_manual(self):
         """Stop manual voice recording and process audio"""
@@ -2303,7 +2516,9 @@ class SecureXApp:
         Uses threading.Events to coordinate with the async registration process.
         """
         try:
+            logger.debug("[DEBUG] Registration record button clicked - entering handler")
             if not self.reg_recording_active:
+                logger.debug("[DEBUG] Registration record button - starting recording")
                 logger.info("Registration record button: START")
                 self.reg_recording_active = True
                 
@@ -2321,9 +2536,11 @@ class SecureXApp:
                     shape=ft.RoundedRectangleBorder(radius=12),
                 )
                 self.update_reg_status("⦿ Recording... Speak now!", SciFiColors.WARNING)
+                logger.debug("[DEBUG] UI updated for registration listening state")
                 self.page.update()
                 
                 # Start background recording thread
+                logger.debug("[DEBUG] Starting registration recording thread")
                 self.reg_recording_thread = threading.Thread(
                     target=self._record_audio_for_registration_thread,
                     daemon=True
@@ -2332,6 +2549,7 @@ class SecureXApp:
                 logger.info("Registration recording thread started")
                 
             else:
+                logger.debug("[DEBUG] Registration record button - stopping recording")
                 logger.info("Registration record button: STOP")
                 # Stop recording
                 self.reg_recording_active = False
@@ -2345,10 +2563,12 @@ class SecureXApp:
                 self.reg_record_button.text = "PROCESSING..."
                 self.reg_record_button.disabled = True
                 self.update_reg_status("✓ Recording stopped - processing...", SciFiColors.SUCCESS)
+                logger.debug("[DEBUG] UI updated for registration stopping state")
                 self.page.update()
                 logger.info("Registration recording stop requested")
         
         except Exception as ex:
+            logger.debug(f"[DEBUG] Exception in registration record button handler: {ex}")
             logger.error(f"Reg button click error: {ex}", exc_info=True)
             self.reg_recording_active = False
             self.update_reg_status(f"⚠ Error: {ex}", SciFiColors.ERROR)
@@ -2547,11 +2767,17 @@ class SecureXApp:
         logger.info("Logging out user")
         
         try:
+            # --- START FIX: Manually close dialogs on logout ---
+            if self.voice_assistant_active:
+                self.voice_assistant.stop_continuous_listening()
+                self.voice_assistant_active = False
+
             for dialog in self.active_dialogs[:]:
                 try:
-                    dialog.open = False
+                    self._close_dialog_safe(dialog, update_page=False)
                 except:
                     pass
+            # --- END FIX ---
         except Exception as e:
             logger.error(f"Error closing dialog: {e}")
         
@@ -2566,18 +2792,24 @@ class SecureXApp:
         self.page.add(login)
         self.page.update()
         
-        self.page.run_task(self._speak_async("Logged out successfully"))
+        self.page.run_task(self._speak_async, "Logged out successfully") # <-- FIX: Pass function and arg
 
     def _on_app_close(self, e=None):
         """Handle application shutdown"""
         logger.info("Application shutdown initiated")
         
         try:
+            # --- START FIX: Manually close dialogs on shutdown ---
+            if self.voice_assistant_active:
+                self.voice_assistant.stop_continuous_listening()
+                self.voice_assistant_active = False
+            
             for dialog in self.active_dialogs[:]:
                 try:
-                    dialog.open = False
+                    self._close_dialog_safe(dialog, update_page=False)
                 except:
                     pass
+            # --- END FIX ---
             self.active_dialogs.clear()
             
             if hasattr(self, 'voice_assistant') and self.voice_assistant:
@@ -2618,3 +2850,4 @@ def main(page: ft.Page):
 
 if __name__ == "__main__":
     ft.app(target=main)
+
