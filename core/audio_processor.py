@@ -187,8 +187,10 @@ class AudioRecorder:
             padding_start = np.zeros(min(padding_samples, audio_np.size), dtype=self.dtype)
             audio_np = np.concatenate([padding_start, audio_np], axis=0)
 
-            # --- Apply normalization ---
-            audio_np = AudioProcessor.normalize(audio_np)
+            # --- START FIX: Use AGC instead of Normalize ---
+            logger.debug("Applying AGC to VAD audio...")
+            audio_np = AudioProcessor.apply_automatic_gain_control(audio_np)
+            # --- END FIX ---
             
             logger.info("VAD Recording complete: samples=%d duration=%.2fs", audio_np.shape[0], audio_np.shape[0] / self.sample_rate)
             return audio_np
@@ -297,10 +299,10 @@ class AudioRecorder:
         if audio_np.dtype != np.float32:
             audio_np = audio_np.astype(np.float32)
 
-        # --- START FIX: Always normalize audio for Vosk ---
+        # --- START FIX: Use AGC instead of Normalize ---
         if audio_np.size:
-            logger.debug("Normalizing audio for transcription...")
-            audio_np = AudioProcessor.normalize(audio_np)
+            logger.debug("Applying AGC to recorded audio for transcription...")
+            audio_np = AudioProcessor.apply_automatic_gain_control(audio_np)
         # --- END FIX ---
 
         logger.info("Recording complete: samples=%d duration%.2fs", audio_np.shape[0], audio_np.shape[0] / self.sample_rate)
@@ -404,12 +406,20 @@ class AudioProcessor:
         if audio.size == 0:
             return audio
         rms = float(np.sqrt(np.mean(audio ** 2)))
-        if rms <= 0:
+        if rms <= 1e-5: # Avoid division by zero/near-zero
+            logger.debug("Skipping AGC, audio is silent")
             return audio
         gain = target_level / rms
-        gain = min(gain, 10.0)
+        gain = min(gain, 10.0) # Cap gain to avoid extreme amplification
         adjusted = audio * gain
-        adjusted = np.tanh(adjusted).astype(np.float32)
+        
+        # Soft clipping with tanh to prevent harsh clipping
+        adjusted = np.tanh(adjusted).astype(np.float32) 
+        
+        # --- START FIX: Normalize *after* AGC to get full dynamic range ---
+        adjusted = AudioProcessor.normalize(adjusted)
+        # --- END FIX ---
+        
         logger.debug("AGC applied: gain=%.3f", gain)
         return adjusted
 
