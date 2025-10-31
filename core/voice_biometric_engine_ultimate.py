@@ -8,7 +8,6 @@ import torch
 from typing import Optional, List, Dict, Tuple
 import logging
 from pathlib import Path
-from scipy.spatial.distance import mahalanobis
 from core.voice_engine import VoiceEngine
 from core.anti_spoofing_aasist import AAISTAntiSpoofingEngine as AASISTAntiSpoofing
 from core.audio_preprocessor_advanced import AudioAugmentationEngine, VoiceQualityAnalyzer
@@ -40,7 +39,9 @@ class UltimateVoiceBiometricEngine:
 
         # Initialize AASIST anti-spoofing
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.anti_spoofing = AASISTAntiSpoofing(device)
+        force_fallback = config.get('security', {}).get('force_anti_spoof_fallback', False) or \
+                         config.get('system', {}).get('fast_mode', False)
+        self.anti_spoofing = AASISTAntiSpoofing(device, force_fallback=force_fallback)
 
         # Configuration parameters
         self.base_threshold = config.get('security', {}).get('base_voice_threshold', 0.40)
@@ -52,6 +53,10 @@ class UltimateVoiceBiometricEngine:
 
         # Initialize models
         self.voice_engine.load_models()
+
+        # Performance settings
+        self.spoof_timeout = float(config.get('security', {}).get('anti_spoof_timeout_seconds', 2.0))
+        self.spoof_max_seconds = int(config.get('security', {}).get('anti_spoof_max_audio_seconds', 2))
 
         logger.info("UltimateVoiceBiometricEngine initialized with AASIST anti-spoofing and adaptive features")
 
@@ -88,11 +93,12 @@ class UltimateVoiceBiometricEngine:
                     logger.info(f"Sample {i+1} anti-spoofing bypassed for development/testing")
                     is_genuine = True
                     confidence = 1.0
+                    details = {'bypassed': True}
                 else:
                     spoof_audio = self._prepare_audio_for_spoofing(sample)
                     is_genuine, confidence, details = self.anti_spoofing.detect_spoofing(spoof_audio)
                 logger.info(f"Sample {i+1} anti-spoofing: confidence={confidence:.3f}, genuine={is_genuine}")
-                if confidence < self.spoof_min_confidence:
+                if not is_genuine or confidence < self.spoof_min_confidence:
                     logger.warning(f"Sample {i+1} failed anti-spoofing check (confidence: {confidence:.3f} < {self.spoof_min_confidence})")
                     continue
 
@@ -171,6 +177,8 @@ class UltimateVoiceBiometricEngine:
             Verification result dictionary
         """
         try:
+            import time
+            start_time = time.time()
             result = {
                 'verified': False,
                 'confidence': 0.0,
@@ -192,46 +200,102 @@ class UltimateVoiceBiometricEngine:
 
             # Step 2: AASIST Anti-spoofing gate (FIRST CHECK) - Use minimally processed audio
             # Apply only very gentle processing for anti-spoofing to preserve natural voice characteristics
+            bypass_spoofing_verify = self.config.get('system', {}).get('bypass_anti_spoofing_verify', False)
             bypass_spoofing = self.config.get('system', {}).get('bypass_anti_spoofing', False)
-            if bypass_spoofing:
-                logger.info("Anti-spoofing bypassed for development/testing")
+            logger.info("Starting anti-spoofing analysis...")
+            if bypass_spoofing_verify or bypass_spoofing:
+                logger.info("Anti-spoofing bypassed for verification (fast mode)")
                 spoof_detected = False
                 confidence = 1.0  # Assume genuine
             else:
-                spoof_audio = self._prepare_audio_for_spoofing(audio_data.copy())
-                is_genuine, confidence, details = self.anti_spoofing.detect_spoofing(spoof_audio)
-                spoof_detected = not is_genuine
+                # Trim audio to the first N seconds for faster processing (configurable)
+                sample_rate = 16000
+                max_samples = self.spoof_max_seconds * sample_rate
+                if len(audio_data) > max_samples:
+                    audio_data_trimmed = audio_data[:max_samples]
+                    logger.info(f"Trimmed audio from {len(audio_data)/sample_rate:.1f}s to {self.spoof_max_seconds:.1f}s for spoofing analysis")
+                else:
+                    audio_data_trimmed = audio_data
+
+                spoof_audio = self._prepare_audio_for_spoofing(audio_data_trimmed)
+                spoofing_start = time.time()
+                try:
+                    # Timeout logic: configurable, default 2s for faster verification
+                    from threading import Thread
+                    result_container = {}
+                    def run_spoof():
+                        is_genuine, conf, details = self.anti_spoofing.detect_spoofing(spoof_audio)
+                        result_container['is_genuine'] = is_genuine
+                        result_container['confidence'] = conf
+                        result_container['details'] = details
+                    t = Thread(target=run_spoof)
+                    t.start()
+                    t.join(timeout=self.spoof_timeout)
+                    if t.is_alive():
+                        logger.warning(f"Anti-spoofing analysis timed out after {self.spoof_timeout} seconds - assuming genuine for speed")
+                        spoof_detected = False  # Assume genuine on timeout for faster UX
+                        confidence = 0.5
+                        details = {'error': 'timeout', 'assumed_genuine': True}
+                        t.join(0.1)
+                    else:
+                        is_genuine = result_container.get('is_genuine', False)
+                        confidence = result_container.get('confidence', 0.0)
+                        details = result_container.get('details', {})
+                        spoof_detected = not is_genuine
+                    logger.info(f"Anti-spoofing finished in {time.time()-spoofing_start:.2f}s, confidence={confidence}")
+                except Exception as e:
+                    logger.warning(f"Anti-spoofing error: {e} - assuming genuine for speed")
+                    spoof_detected = False  # Assume genuine on error for faster UX
+                    confidence = 0.5
+                    details = {'error': str(e), 'assumed_genuine': True}
             result['spoof_detected'] = spoof_detected
             result['details']['spoof_confidence'] = confidence
 
             if confidence < self.spoof_min_confidence_verify:  # Use verification threshold (lower)
                 result['details']['failure_reason'] = f"Anti-spoofing failed: {confidence:.3f} < {self.spoof_min_confidence_verify}"
+                logger.info(f"Anti-spoofing failed, returning after {time.time()-start_time:.2f}s")
                 return result
 
-            # Step 3: Extract live embedding
-            live_embedding = self.voice_engine.extract_embedding_from_array(audio_data, sample_rate)
+            # Step 3: Extract live embedding (disable anti-spoofing here since we already did it)
+            logger.info("Extracting voice embedding from audio sample...")
+            live_embedding = self.voice_engine.extract_embedding_from_array(
+                audio_data, 
+                sample_rate,
+                enable_anti_spoofing=False  # Already checked above, avoid double-checking
+            )
             if live_embedding is None:
                 result['details']['failure_reason'] = "Failed to extract embedding"
+                logger.error("Failed to extract embedding from audio")
                 return result
+            
+            logger.info(f"Embedding extracted successfully, shape: {live_embedding.shape}")
 
             # Step 4: Get stored user profile
+            logger.info("Retrieving stored voice profile from database...")
             stored_embeddings = self.db.get_voice_embeddings(user_id)
             if not stored_embeddings:
                 result['details']['failure_reason'] = "No voice profile found"
+                logger.error(f"No voice profile found for user {user_id}")
                 return result
 
             # Use the most recent embedding
             user_profile = stored_embeddings[0]
             stored_mean = user_profile['embedding_array']
             stored_variance = user_profile.get('embedding_variance')
+            logger.info(f"Retrieved voice profile for user {user_id}, embedding shape: {stored_mean.shape}")
 
             # Step 5: Compute similarity scores
+            logger.info("Computing similarity scores...")
             cosine_sim = self._compute_cosine_similarity(live_embedding, stored_mean)
             result['cosine_similarity'] = cosine_sim
+            logger.info(f"Cosine similarity: {cosine_sim:.4f}")
 
             mahalanobis_dist = float('inf')
             if stored_variance is not None:
                 mahalanobis_dist = self._compute_mahalanobis_distance(live_embedding, stored_mean, stored_variance)
+                logger.info(f"Mahalanobis distance: {mahalanobis_dist:.4f}")
+            else:
+                logger.info("No variance data available, skipping Mahalanobis distance")
             result['mahalanobis_distance'] = mahalanobis_dist
 
             # Step 6: Adaptive threshold calculation
@@ -261,11 +325,7 @@ class UltimateVoiceBiometricEngine:
                 excess = combined_score - final_threshold
                 confidence = max(0.0, np.exp(-excess * 0.1))  # Reduced multiplier for gentler decay
 
-            result['confidence'] = confidence
-
-            logger.info(f"Final confidence: {result['confidence']:.4f}, verified: {result['verified']}")
-
-            # Step 8: Challenge-response (optional)
+            # Step 8: Challenge-response (optional) - Check BEFORE final decision
             if enable_challenge:
                 challenge_result = self._perform_challenge_response(audio_data, sample_rate)
                 result['challenge_passed'] = challenge_result['passed']
@@ -273,6 +333,8 @@ class UltimateVoiceBiometricEngine:
 
                 if not challenge_result['passed']:
                     result['details']['failure_reason'] = "Challenge-response failed"
+                    result['verified'] = False
+                    result['confidence'] = 0.0
                     return result
 
             # Step 9: Final decision - Use cosine similarity as primary metric
@@ -280,18 +342,29 @@ class UltimateVoiceBiometricEngine:
             cosine_threshold = 0.5  # 50% similarity threshold
             result['verified'] = cosine_sim >= cosine_threshold
 
-            # Adjust confidence based on verification result
+            # Step 10: Adjust confidence based on verification result
+            # Use a combination of cosine similarity and the combined score for final confidence
             if result['verified']:
                 # For verified matches, confidence reflects how much better than threshold
                 excess_similarity = cosine_sim - cosine_threshold
-                result['confidence'] = min(1.0, 0.5 + excess_similarity * 2.0)  # Scale to 50-100%
+                cosine_confidence = min(1.0, 0.5 + excess_similarity * 2.0)  # Scale to 50-100%
+                # Blend with combined score confidence (weighted average)
+                result['confidence'] = (cosine_confidence * 0.7 + confidence * 0.3)
             else:
                 # For failed matches, confidence reflects how close to threshold
-                result['confidence'] = max(0.0, cosine_sim * 2.0)  # Scale to 0-100%
+                cosine_confidence = max(0.0, cosine_sim * 2.0)  # Scale to 0-100%
+                # Use the lower of the two confidences for failed matches
+                result['confidence'] = min(cosine_confidence, confidence)
 
-            # Step 10: Adaptive learning (if verification successful)
+            logger.info(f"Final decision - verified: {result['verified']}, confidence: {result['confidence']:.4f}, cosine_sim: {cosine_sim:.4f}")
+
+            # Step 11: Adaptive learning (if verification successful)
             if result['verified'] and self.learning_enabled:
-                self.db.update_voice_embedding(user_id, live_embedding, learning_rate=0.1)
+                try:
+                    self.db.update_voice_embedding(user_id, live_embedding, learning_rate=0.1)
+                    logger.info(f"Voice embedding updated for user {user_id} with adaptive learning")
+                except Exception as e:
+                    logger.warning(f"Failed to update voice embedding during learning: {e}")
 
             result['details']['cosine_threshold'] = cosine_threshold
             result['details']['combined_score'] = combined_score
@@ -318,15 +391,18 @@ class UltimateVoiceBiometricEngine:
             Minimally processed audio suitable for spoofing detection
         """
         try:
-            # Start with the processed audio (which has AGC applied)
-            # Remove only the most destructive noise reduction steps
-
+            # Ensure audio is 1D for processing
+            if audio_data.ndim == 2:
+                audio_data = audio_data.squeeze()
+            elif audio_data.ndim > 2:
+                audio_data = audio_data.flatten()
+            
             # Apply very gentle high-pass filter (remove DC bias only)
             from scipy import signal
             nyquist = 16000 / 2
             cutoff = 20 / nyquist  # Very low cutoff, just remove DC
             b, a = signal.butter(1, cutoff, btype='high')
-            audio_data = signal.filtfilt(b, a, audio_data.flatten())
+            audio_data = signal.filtfilt(b, a, audio_data)
 
             # Skip aggressive noise reduction - preserve natural dynamics
             # Skip spectral subtraction - it's too destructive for spoofing detection
@@ -336,7 +412,7 @@ class UltimateVoiceBiometricEngine:
             if max_val > 0:
                 audio_data = audio_data / max_val * 0.95  # Gentle normalization
 
-            return audio_data.reshape(-1, 1) if len(audio_data.shape) == 1 else audio_data
+            return audio_data
 
         except Exception as e:
             logger.warning(f"Failed to prepare audio for spoofing, using original: {e}")

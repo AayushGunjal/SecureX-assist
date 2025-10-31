@@ -8,6 +8,8 @@ app:
 system:
   development_mode: true  # Enable for easier testing (disables some security features)
   bypass_anti_spoofing: true  # Complete bypass of anti-spoofing (only use for testing/dev)
+  bypass_anti_spoofing_verify: true  # Bypass anti-spoofing specifically for verification (faster login)
+  fast_mode: true
 
 security:
   voice_threshold: 0.50  # Cosine distance threshold - Lower = stricter (0.25=75% match), Higher = more forgiving (0.50=50% match)
@@ -30,6 +32,9 @@ security:
   min_security_confidence: 0.5  # Minimum confidence for security checks (0-1) - LOWERED for fewer false positives
   anti_spoof_mode: "advanced"  # "basic" or "advanced" (SOTA models)
   quiet_environment_adaptation: true  # Adapt anti-spoofing for quiet environments
+  force_anti_spoof_fallback: true
+  anti_spoof_timeout_seconds: 2
+  anti_spoof_max_audio_seconds: 2
 
 audio:
   sample_rate: 16000
@@ -47,7 +52,7 @@ augmentation:
   noise_level: 0.01  # Background noise addition level
 
 tts:
-  enabled: true
+  enabled: false
   model_path: "en_US-lessac-medium.onnx"  # Piper TTS model path
   rate: 1.0
   volume: 0.9
@@ -69,6 +74,6 @@ ui:
   animation_speed: 300  # milliseconds
 
 tts:
-  enabled: true
+  enabled: false
   rate: 150
   volume: 0.9

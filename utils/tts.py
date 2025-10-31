@@ -54,6 +54,7 @@ class TextToSpeech:
             self.voice = None
 
     def speak(self, text: str, blocking: bool = False):
+        logger.info(f"DEBUG: Entered TTS.speak with text: {text}, blocking={blocking}")
         """
         Speak text using Piper TTS
 
@@ -62,6 +63,7 @@ class TextToSpeech:
             blocking: If True, wait for speech to complete
         """
         if not self.enabled or not text:
+            logger.info("DEBUG: TTS.speak early exit (disabled or empty text)")
             return
 
         if self.voice:
@@ -82,15 +84,19 @@ class TextToSpeech:
                     sd.play(audio_array, samplerate=22050)
 
                 logger.info(f"Spoke: {text}")
+                logger.info("DEBUG: Exiting TTS.speak after Piper TTS")
 
             except Exception as e:
                 logger.error(f"Piper TTS failed: {e}")
+                logger.info("DEBUG: Calling _fallback_tts from Piper TTS failure")
                 self._fallback_tts(text, blocking)
         else:
+            logger.info("DEBUG: Calling _fallback_tts from no Piper voice")
             # Fallback to system TTS
             self._fallback_tts(text, blocking)
 
     def _fallback_tts(self, text: str, blocking: bool = False):
+        logger.info(f"DEBUG: Entered _fallback_tts with text: {text}, blocking={blocking}")
         """Fallback TTS using pyttsx3 with proper engine management"""
         try:
             import pyttsx3
@@ -119,9 +125,11 @@ class TextToSpeech:
                     thread.start()
 
             logger.info(f"Fallback TTS spoke: {text}")
+            logger.info("DEBUG: Exiting _fallback_tts after speaking")
 
         except Exception as e:
             logger.error(f"Fallback TTS failed: {e}")
+        logger.info("DEBUG: Exiting _fallback_tts after exception")
 
     def speak_async(self, text: str):
         """Speak text asynchronously"""

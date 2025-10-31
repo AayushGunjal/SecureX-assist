@@ -375,10 +375,14 @@ class Database:
                     json.loads(embedding_dict['embedding_data'])
                 )
                 # Deserialize variance data if present
-                if embedding_dict['embedding_variance']:
-                    embedding_dict['embedding_variance'] = np.array(
-                        json.loads(embedding_dict['embedding_variance'])
-                    )
+                if embedding_dict['embedding_variance'] is not None and embedding_dict['embedding_variance'] != '':
+                    try:
+                        embedding_dict['embedding_variance'] = np.array(
+                            json.loads(embedding_dict['embedding_variance'])
+                        )
+                    except (json.JSONDecodeError, TypeError, ValueError) as e:
+                        logger.warning(f"Failed to parse embedding_variance for user {user_id}: {e}")
+                        embedding_dict['embedding_variance'] = None
                 else:
                     embedding_dict['embedding_variance'] = None
                 embeddings.append(embedding_dict)
@@ -433,20 +437,41 @@ class Database:
                 logger.warning(f"No active voice embedding found for user {user_id}")
                 return False
             
-            # Get current embedding
+            # Get current embedding and variance
             current_embedding = np.array(json.loads(row['embedding_data']))
+            current_variance = None
+            if row['embedding_variance'] is not None and row['embedding_variance'] != '':
+                try:
+                    current_variance = np.array(json.loads(row['embedding_variance']))
+                except (json.JSONDecodeError, TypeError, ValueError) as e:
+                    logger.warning(f"Could not parse variance for user {user_id}: {e}, continuing without variance update")
             
             # Adaptive update: 0.9 * old + 0.1 * new
             updated_embedding = (1 - learning_rate) * current_embedding + learning_rate * new_embedding
             updated_json = json.dumps(updated_embedding.tolist())
             
+            # Update variance if it exists (slight increase to account for new data)
+            variance_json = None
+            if current_variance is not None:
+                # Slightly increase variance to reflect model uncertainty with new data
+                updated_variance = current_variance * (1 + learning_rate * 0.1)
+                variance_json = json.dumps(updated_variance.tolist())
+            
             # Update the database
-            cursor.execute(
-                """UPDATE voice_embeddings 
-                SET embedding_data = ?, quality_score = quality_score + 0.01 
-                WHERE id = ?""",
-                (updated_json, row['id'])
-            )
+            if variance_json:
+                cursor.execute(
+                    """UPDATE voice_embeddings 
+                    SET embedding_data = ?, embedding_variance = ?, quality_score = quality_score + 0.01 
+                    WHERE id = ?""",
+                    (updated_json, variance_json, row['id'])
+                )
+            else:
+                cursor.execute(
+                    """UPDATE voice_embeddings 
+                    SET embedding_data = ?, quality_score = quality_score + 0.01 
+                    WHERE id = ?""",
+                    (updated_json, row['id'])
+                )
             
             self.conn.commit()
             logger.info(f"Voice embedding updated for user {user_id} with adaptive learning")
@@ -676,15 +701,42 @@ class Database:
         try:
             cursor = self.conn.cursor()
             cursor.execute(
-                """INSERT INTO liveness_challenges 
+                """INSERT INTO liveness_challenges
                 (user_id, challenge_phrase, transcribed_text, similarity_score, passed)
                 VALUES (?, ?, ?, ?, ?)""",
                 (user_id, challenge_phrase, transcribed_text, similarity_score, passed)
             )
             self.conn.commit()
-            
+
             return cursor.lastrowid
-            
+
         except Exception as e:
             logger.error(f"Failed to store liveness challenge: {e}")
             return None
+
+    def get_liveness_challenges(self, user_id: int, limit: int = 50) -> List[Dict]:
+        """
+        Get liveness challenges for a user
+
+        Args:
+            user_id: User ID
+            limit: Maximum number of challenges to return
+
+        Returns:
+            List of liveness challenge dictionaries
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """SELECT * FROM liveness_challenges
+                WHERE user_id = ?
+                ORDER BY created_at DESC LIMIT ?""",
+                (user_id, limit)
+            )
+
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+
+        except Exception as e:
+            logger.error(f"Failed to get liveness challenges: {e}")
+            return []

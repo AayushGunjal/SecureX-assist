@@ -88,9 +88,9 @@ class AudioRecorder:
             raise sd.CallbackStop()
 
     def record_audio(self,
-                     duration: float = 300.0,
-                     progress_callback: Optional[Callable[[float], None]] = None,
-                     device: Optional[int] = None) -> Optional[np.ndarray]:
+                       duration: float = 300.0,
+                       progress_callback: Optional[Callable[[float], None]] = None,
+                       device: Optional[int] = None) -> Optional[np.ndarray]:
         """
         Record audio for up to `duration` seconds. Returns earlier if stop_recording() is called.
 
@@ -175,11 +175,19 @@ class AudioRecorder:
         """Signal the running recorder to stop as soon as possible."""
         logger.info("stop_recording() called -> setting stop event")
         self._stop_event.set()
-        # As an extra attempt to interrupt sounddevice, call sd.stop()
-        try:
-            sd.stop()
-        except Exception:
-            logger.debug("sd.stop() failed (maybe no active stream)", exc_info=True)
+        
+        # --- THIS IS THE FIX ---
+        # The line below caused a deadlock. It is not thread-safe to call
+        # sd.stop() from a different thread than the one managing the stream.
+        # The stop_event is sufficient to stop both the callback and the
+        # record_audio loop.
+        
+        # try:
+        #     sd.stop()
+        # except Exception:
+        #     logger.debug("sd.stop() failed (maybe no active stream)", exc_info=True)
+        # --- END FIX ---
+
 
     def save_audio(self, audio: np.ndarray, path: str) -> bool:
         """

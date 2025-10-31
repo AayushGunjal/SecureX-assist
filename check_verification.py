@@ -31,7 +31,7 @@ def main():
         print(f'User {user["username"]} (ID: {user["id"]}): {len(embeddings)} voice embeddings')
         if embeddings:
             variance = embeddings[0].get('embedding_variance')
-            if variance:
+            if variance is not None:
                 print(f'  Latest embedding ID: {embeddings[0]["id"]}, variance length: {len(variance)}')
                 print(f'  Mean variance: {sum(variance)/len(variance):.6f}')
             else:
