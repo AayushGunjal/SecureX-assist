@@ -18,6 +18,7 @@ from pathlib import Path
 import threading
 import logging
 from typing import Optional, Callable, Tuple, List
+import asyncio # <-- Added for VAD
 
 import numpy as np
 
@@ -57,7 +58,7 @@ class AudioRecorder:
         self._lock = threading.Lock()
 
         logger.info("AudioRecorder initialized: samplerate=%d, channels=%d, blocksize=%d, dtype=%s",
-                    self.sample_rate, self.channels, self.blocksize, self.dtype)
+                     self.sample_rate, self.channels, self.blocksize, self.dtype)
 
     def list_devices(self) -> list:
         """Return available input devices (list of dicts)."""
@@ -68,6 +69,131 @@ class AudioRecorder:
         except Exception as e:
             logger.exception("Failed to list devices: %s", e)
             return []
+
+    # --- START: ADD record_with_vad METHOD ---
+    def record_with_vad(self,
+                          vad_detector,
+                          min_speech_duration_ms: int = 250,
+                          max_silence_duration_ms: int = 1000,
+                          padding_duration_ms: int = 200,
+                          device: Optional[int] = None) -> Optional[np.ndarray]:
+        """
+        Records from the microphone until speech stops, using VAD.
+        This is a blocking function that returns when speech is finished.
+        """
+        self._stop_event.clear()
+        with self._lock:
+            self._frames = []
+
+        chosen_device = device if device is not None else self.device
+        logger.info("Starting VAD recording (device=%s)...", chosen_device)
+
+        min_speech_samples = int(self.sample_rate * min_speech_duration_ms / 1000)
+        max_silence_samples = int(self.sample_rate * max_silence_duration_ms / 1000)
+        padding_samples = int(self.sample_rate * padding_duration_ms / 1000)
+        
+        speech_started = False
+        silence_samples = 0
+        speech_samples = 0
+        
+        # We need a queue to pass frames from the callback thread to this thread
+        frame_queue = queue.Queue()
+        
+        def vad_callback(indata: np.ndarray, frames: int, time_info, status):
+            """This runs in a separate thread."""
+            if status:
+                logger.debug("VAD InputStream status: %s", status)
+            if self._stop_event.is_set():
+                frame_queue.put(None) # Signal stop
+                raise sd.CallbackStop()
+            frame_queue.put(indata.copy())
+
+        try:
+            self._stream = sd.InputStream(samplerate=self.sample_rate,
+                                          channels=self.channels,
+                                          dtype=self.dtype,
+                                          blocksize=self.blocksize,
+                                          device=chosen_device,
+                                          callback=vad_callback)
+            
+            with self._stream:
+                while not self._stop_event.is_set():
+                    # Block and wait for a frame
+                    chunk = frame_queue.get() 
+                    if chunk is None: # Stop signal
+                        break
+
+                    # Flatten to 1D
+                    if chunk.ndim > 1 and chunk.shape[1] == 1:
+                        chunk = chunk.flatten()
+                    elif chunk.ndim > 1:
+                        chunk = np.mean(chunk, axis=1) # Mix to mono
+
+                    has_voice, _ = vad_detector.detect_rms(chunk)
+                    
+                    if has_voice:
+                        if not speech_started:
+                            logger.info("VAD: Speech detected")
+                            speech_started = True
+                        
+                        with self._lock:
+                            self._frames.append(chunk)
+                        speech_samples += len(chunk)
+                        silence_samples = 0
+                    
+                    elif speech_started:
+                        # We are in speech, but this chunk is silent
+                        with self._lock:
+                            self._frames.append(chunk)
+                        silence_samples += len(chunk)
+                        
+                        if silence_samples > max_silence_samples:
+                            logger.info("VAD: Max silence reached, stopping.")
+                            break
+                    else:
+                        # Still waiting for speech
+                        pass
+            
+            logger.info("VAD stream stopped.")
+
+            with self._lock:
+                if not self._frames:
+                    logger.info("VAD: No frames captured.")
+                    return None
+                
+                if speech_samples < min_speech_samples:
+                    logger.info("VAD: Speech too short (%d < %d samples), discarding.", speech_samples, min_speech_samples)
+                    return None
+
+                audio_np = np.concatenate(self._frames, axis=0)
+
+            # Trim final silence if we stopped on silence
+            if silence_samples > 0:
+                audio_np = audio_np[:-silence_samples]
+
+            # Add padding
+            padding_start = np.zeros(min(padding_samples, speech_samples), dtype=self.dtype)
+            audio_np = np.concatenate([padding_start, audio_np], axis=0)
+
+            # --- Apply normalization ---
+            audio_np = AudioProcessor.normalize(audio_np)
+            
+            logger.info("VAD Recording complete: samples=%d duration=%.2fs", audio_np.shape[0], audio_np.shape[0] / self.sample_rate)
+            return audio_np
+
+        except queue.Empty:
+            # This is expected if the loop runs faster than audio comes in
+            pass
+        except Exception as e:
+            logger.error("VAD recording error: %s", e, exc_info=True)
+            return None
+        finally:
+            self._stop_event.clear()
+            if self._stream and self._stream.active:
+                self._stream.stop()
+                self._stream.close()
+            self._stream = None
+    # --- END: ADD record_with_vad METHOD ---
 
     def _callback(self, indata: np.ndarray, frames: int, time_info, status):
         """sounddevice callback: store frames and stop if requested."""
@@ -88,9 +214,9 @@ class AudioRecorder:
             raise sd.CallbackStop()
 
     def record_audio(self,
-                       duration: float = 300.0,
-                       progress_callback: Optional[Callable[[float], None]] = None,
-                       device: Optional[int] = None) -> Optional[np.ndarray]:
+                           duration: float = 300.0,
+                           progress_callback: Optional[Callable[[float], None]] = None,
+                           device: Optional[int] = None) -> Optional[np.ndarray]:
         """
         Record audio for up to `duration` seconds. Returns earlier if stop_recording() is called.
 
@@ -161,12 +287,19 @@ class AudioRecorder:
         if audio_np.dtype != np.float32:
             audio_np = audio_np.astype(np.float32)
 
-        # Normalize if peak > 1.0
+        # --- START FIX: Always normalize audio for Vosk ---
+        # Normalize if peak > 1.0 (Original code)
+        # if audio_np.size:
+        #     peak = float(np.max(np.abs(audio_np)))
+        #     if peak > 1.0 + 1e-6:
+        #         logger.debug("Normalizing recorded data (peak=%f)", peak)
+        #         audio_np = (audio_np / peak).astype(np.float32)
+
+        # New: Always normalize audio to full scale for better transcription
         if audio_np.size:
-            peak = float(np.max(np.abs(audio_np)))
-            if peak > 1.0 + 1e-6:
-                logger.debug("Normalizing recorded data (peak=%f)", peak)
-                audio_np = (audio_np / peak).astype(np.float32)
+            logger.debug("Normalizing audio for transcription...")
+            audio_np = AudioProcessor.normalize(audio_np)
+        # --- END FIX ---
 
         logger.info("Recording complete: samples=%d duration%.2fs", audio_np.shape[0], audio_np.shape[0] / self.sample_rate)
         return audio_np
@@ -183,9 +316,9 @@ class AudioRecorder:
         # record_audio loop.
         
         # try:
-        #     sd.stop()
+        #     sd.stop()
         # except Exception:
-        #     logger.debug("sd.stop() failed (maybe no active stream)", exc_info=True)
+        #     logger.debug("sd.stop() failed (maybe no active stream)", exc_info=True)
         # --- END FIX ---
 
 
@@ -287,7 +420,8 @@ class AudioProcessor:
         if audio.size == 0:
             return audio
         peak = float(np.max(np.abs(audio)))
-        if peak <= 0:
+        if peak <= 1e-5: # Avoid division by zero/near-zero
+            logger.debug("Skipping normalization, audio is silent")
             return audio
         return (audio / peak).astype(np.float32)
 
@@ -303,6 +437,13 @@ class AudioProcessor:
 
     @staticmethod
     def apply_bandpass(audio: np.ndarray, sr: int, lowcut: float = 300.0, highcut: float = 3400.0) -> np.ndarray:
+        # --- START FIX: Add warning ---
+        logger.warning(
+            "Applying 300-3400Hz bandpass filter. This is for telephony simulation "
+            "and WILL HARM transcription accuracy for modern speech models. "
+            "Disable this if not required."
+        )
+        # --- END FIX ---
         try:
             from scipy import signal
             nyq = sr / 2.0

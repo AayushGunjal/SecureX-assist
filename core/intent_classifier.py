@@ -7,7 +7,15 @@ import logging
 from typing import Dict, List, Tuple, Optional
 import numpy as np
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("core.intent_classifier")
+
+# --- START: Added basic logging config ---
+if not logger.handlers:
+    ch = logging.StreamHandler()
+    ch.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logger.addHandler(ch)
+logger.setLevel(logging.INFO)
+# --- END: Added basic logging config ---
 
 class IntentClassifier:
     """
@@ -18,7 +26,7 @@ class IntentClassifier:
         self.model = None
         self.intents = {}
         self.intent_embeddings = {}
-        self.threshold = 0.7  # Similarity threshold
+        self.threshold = 0.6  # --- FIX: Lowered threshold for better matching ---
         
         # Try to load the model, but don't fail if it doesn't work
         try:
@@ -61,6 +69,7 @@ class IntentClassifier:
             Tuple of (intent_name, confidence_score) or (None, 0.0) if no match
         """
         if not self.intent_embeddings:
+            logger.warning("Classifier has no intents loaded.")
             return None, 0.0
             
         if self.model:
@@ -70,10 +79,12 @@ class IntentClassifier:
             # Compute similarities with all intents
             similarities = {}
             for intent_name, intent_embedding in self.intent_embeddings.items():
-                similarity = np.dot(text_embedding, intent_embedding) / (
+                # --- START FIX: Use cosine similarity ---
+                sim = np.dot(text_embedding, intent_embedding) / (
                     np.linalg.norm(text_embedding) * np.linalg.norm(intent_embedding)
                 )
-                similarities[intent_name] = similarity
+                similarities[intent_name] = sim
+                # --- END FIX ---
             
             # Find best match
             best_intent = max(similarities, key=similarities.get)
@@ -89,7 +100,9 @@ class IntentClassifier:
         else:
             # Use keyword-based classification
             text_lower = text.lower()
-            for intent_name, examples in self.intent_embeddings.items():
+            # --- START FIX: Use 'intents' for keyword fallback ---
+            for intent_name, examples in self.intents.items():
+            # --- END FIX ---
                 for example in examples:
                     if example.lower() in text_lower:
                         logger.info(f"Keyword matched '{text}' as intent '{intent_name}'")
@@ -98,96 +111,156 @@ class IntentClassifier:
             logger.info(f"No keyword match for '{text}'")
             return None, 0.0
     
+    # --- START REFACTOR: Replaced with 50 specific intents ---
     def setup_default_intents(self):
-        """Setup default intents for SecureX assistant"""
-        
-        # System control
-        self.add_intent("open_app", [
-            "open notepad", "launch chrome", "start calculator", "open file explorer",
-            "run notepad", "open browser", "start word", "launch application"
-        ])
-        
-        self.add_intent("close_app", [
-            "close notepad", "exit chrome", "close calculator", "close window",
-            "quit application", "close program", "exit app"
-        ])
-        
-        self.add_intent("system_lock", [
-            "lock the system", "lock computer", "lock screen", "secure system",
-            "lock workstation", "lock pc"
-        ])
-        
-        self.add_intent("system_restart", [
-            "restart computer", "reboot system", "restart pc", "reboot"
-        ])
-        
-        self.add_intent("system_shutdown", [
-            "shutdown computer", "turn off pc", "power off", "shutdown system"
-        ])
-        
-        # File management
-        self.add_intent("list_files", [
-            "list files", "show files", "what files are here", "list directory",
-            "show folder contents", "list documents"
-        ])
-        
-        self.add_intent("delete_file", [
-            "delete file", "remove file", "erase file", "delete document"
-        ])
-        
-        self.add_intent("open_file", [
-            "open file", "show file", "read file", "open document"
-        ])
-        
-        # Media control
-        self.add_intent("play_music", [
-            "play music", "start music", "play song", "music on"
-        ])
-        
-        self.add_intent("pause_music", [
-            "pause music", "stop music", "music off", "pause song"
-        ])
-        
-        self.add_intent("mute_audio", [
-            "mute", "mute audio", "turn off sound", "quiet"
-        ])
-        
-        self.add_intent("unmute_audio", [
-            "unmute", "unmute audio", "turn on sound", "sound on"
-        ])
-        
-        # Information
-        self.add_intent("time", [
-            "what time is it", "tell me the time", "current time", "time please"
-        ])
-        
-        self.add_intent("date", [
-            "what date is it", "today's date", "current date", "date please"
-        ])
-        
-        self.add_intent("system_info", [
-            "system status", "computer info", "system information", "performance"
-        ])
-        
-        # Custom/Assistant
-        self.add_intent("help", [
-            "help", "what can you do", "commands", "assist me", "help me"
-        ])
-        
-        self.add_intent("who_are_you", [
-            "who are you", "what is your name", "introduce yourself", "who is this"
-        ])
-        
-        self.add_intent("show_logs", [
-            "show logs", "view logs", "check logs", "system logs"
-        ])
-        
+        """
+        Add all default intents for the SecureX Voice Assistant.
+        """
+        logger.info("Setting up default intents...")
+
+        # --- Greetings & Politeness ---
         self.add_intent("greeting", [
-            "hello", "hi", "hey", "good morning", "good afternoon", "good evening"
+            "hello", "hi", "hey there", "greetings"
         ])
-        
         self.add_intent("goodbye", [
-            "bye", "goodbye", "see you later", "farewell"
+            "goodbye", "bye", "see you later", "exit"
         ])
-        
+        self.add_intent("good_morning", ["good morning"])
+        self.add_intent("good_afternoon", ["good afternoon"])
+        self.add_intent("good_evening", ["good evening"])
+        self.add_intent("good_night", ["good night"])
+        self.add_intent("thank_you", ["thank you", "thanks"])
+        self.add_intent("sorry", ["sorry", "my apologies"])
+        self.add_intent("how_are_you", ["how are you", "how are you doing"])
+
+        # --- System Commands ---
+        self.add_intent("system_lock", [
+            "lock system", "lock my computer", "lock this device", "secure computer"
+        ])
+        self.add_intent("system_restart", [
+            "restart system", "restart my computer", "reboot"
+        ])
+        self.add_intent("system_shutdown", [
+            "shutdown system", "shut down my computer", "turn off computer"
+        ])
+        self.add_intent("system_info", [
+            "system status", "show system info", "how is the computer running", "check cpu"
+        ])
+
+        # --- Application Commands ---
+        self.add_intent("open_calculator", [
+            "open calculator", "launch calculator", "run calculator", "calculator"
+        ])
+        self.add_intent("open_notepad", [
+            "open notepad", "launch notepad", "open text editor", "new note"
+        ])
+        self.add_intent("open_explorer", [
+            "open file explorer", "launch file explorer", "show my files", "open files"
+        ])
+        self.add_intent("open_app", [
+            "open app", "launch application", "open chrome", "launch firefox"
+        ])
+        self.add_intent("close_app", [
+            "close application", "close this app", "exit program"
+        ])
+
+        # --- Window & Media ---
+        self.add_intent("minimize_window", [
+            "minimize this", "minimize window", "hide this"
+        ])
+        self.add_intent("maximize_window", [
+            "maximize this", "maximize window", "full screen"
+        ])
+        self.add_intent("play_music", ["play music", "play a song"])
+        self.add_intent("pause_music", ["pause music", "stop music"])
+        self.add_intent("mute_audio", ["mute", "mute volume", "silence"])
+        self.add_intent("unmute_audio", ["unmute", "restore volume", "speak up"])
+
+        # --- File System ---
+        self.add_intent("list_files", [
+            "list files", "what files are here", "show files in directory"
+        ])
+        self.add_intent("delete_file", [
+            "delete a file", "remove this file"
+        ])
+        self.add_intent("open_file", [
+            "open a file", "read this document"
+        ])
+        self.add_intent("search_files", [
+            "search for a file", "find a file", "where is my document"
+        ])
+
+        # --- Assistant Specific ---
+        self.add_intent("what_can_you_do", [
+            "what can you do", "help", "show commands", "abilities"
+        ])
+        self.add_intent("who_are_you", [
+            "who are you", "what is your name"
+        ])
+        self.add_intent("take_screenshot", [
+            "take a screenshot", "capture the screen", "save screen"
+        ])
+
+        # --- Security & SecureComms ---
+        self.add_intent("run_security_scan", [
+            "run security scan", "scan for viruses"
+        ])
+        self.add_intent("show_logs", [
+            "show security logs", "view audit trail"
+        ])
+        self.add_intent("biometric_status", [
+            "check biometric status", "is biometrics active"
+        ])
+        self.add_intent("send_secure_message", [
+            "send a secure message", "new message"
+        ])
+        self.add_intent("check_messages", [
+            "check my messages", "do I have new messages"
+        ])
+        self.add_intent("read_last_message", [
+            "read my last message", "what was the last message"
+        ])
+        self.add_intent("start_voice_call", [
+            "start a voice call", "call Aayush"
+        ])
+
+        # --- Fun & Interactive ---
+        self.add_intent("tell_joke", [
+            "tell me a joke", "make me laugh"
+        ])
+        self.add_intent("play_game", [
+            "let's play a game", "play a game"
+        ])
+        self.add_intent("motivate_me", [
+            "motivate me", "give me motivation"
+        ])
+        self.add_intent("compliment_me", [
+            "compliment me", "say something nice"
+        ])
+        self.add_intent("tell_fact", [
+            "tell me a fact", "interesting fact"
+        ])
+        self.add_intent("sing_song", [
+            "sing me a song", "sing a song"
+        ])
+        self.add_intent("dance", [
+            "can you dance", "do a dance"
+        ])
+        self.add_intent("tell_story", [
+            "tell me a story", "read a story"
+        ])
+
+        # --- General Knowledge ---
+        self.add_intent("get_time", [
+            "what time is it", "tell me the time"
+        ])
+        self.add_intent("get_date", [
+            "what is the date", "what's today's date"
+        ])
+        self.add_intent("show_weather", [
+            "what's the weather", "show me the forecast"
+        ])
+
         logger.info(f"Setup {len(self.intents)} default intents")
+        # --- END REFACTOR ---
+
