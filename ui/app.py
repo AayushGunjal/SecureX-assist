@@ -13,6 +13,7 @@ import insightface
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+import queue # Added for VAD
 
 # --- Core and Utils Imports for SecureXApp ---
 # (Ensure these files exist in your project structure)
@@ -69,8 +70,9 @@ class SecureXApp:
         self.tts = TextToSpeech(config)
 
         # --- FIX: Pass engines and config to VoiceAssistant ---
+        # --- FIX: Point to the correct Indian English model ---
         self.voice_assistant = VoiceAssistant(
-            model_path=config.get('vosk', {}).get('model_path', 'vosk-model-small-en-us-0.15'),
+            model_path=config.get('vosk', {}).get('model_path', 'vosk-model-en-in-0.5'),
             biometric_engine=self.ultimate_voice_engine,
             tts_engine=self.tts
         )
@@ -190,14 +192,17 @@ class SecureXApp:
         
         self.page.add(self.build_login_view())
         
-        # Run initial TTS asynchronously
+        # --- START FIX: Correctly schedule startup task ---
         async def start_speech():
-            # --- FIX: Pass function to run_task, not lambda ---
+            # Use run_task for thread-safe operations
             await self.page.run_task(self._speak_async, "SecureX Assist initialized. Ready for authentication.")
         
-        # Correct way to run an async function
+        # Check if loop is available before creating task
         if self.page.loop:
-            self.page.loop.create_task(start_speech())
+             self.page.loop.create_task(start_speech())
+        else:
+             logger.warning("No asyncio loop available on page to run startup speech.")
+        # --- END FIX ---
         
     def setup_page(self):
         """Configure page settings"""
@@ -1258,8 +1263,8 @@ class SecureXApp:
             if self.current_nav_section == "assistant" and section_name != "assistant":
                 if self.voice_assistant_active:
                     logger.info("Navigation auto-stopping voice assistant.")
-                    self.voice_assistant.stop_continuous_listening()
-                    self.voice_assistant_active = False
+                    # Manually trigger the stop sequence
+                    self._assistant_stop_continuous() 
             # --- END FIX ---
 
             self.current_nav_section = section_name
@@ -1312,13 +1317,19 @@ class SecureXApp:
     def _assistant_stop_continuous(self, e=None):
         """Stop continuous listening"""
         try:
+            # --- START FIX: Explicitly stop the recorder to break VAD loop ---
+            if self.voice_assistant.audio_recorder:
+                self.voice_assistant.audio_recorder.recorder.stop_recording()
+                logger.info("Manually stopping audio recorder for continuous mode.")
+            # --- END FIX ---
+
             self.voice_assistant.stop_continuous_listening()
             self.voice_assistant_active = False
             
             self.assistant_start_btn.visible = True
             self.assistant_stop_btn.visible = False
-            self.assistant_status_text.value = "Stopped"
-            self.assistant_status_text.color = SciFiColors.INFO
+            self.assistant_status_text.value = "Ready to listen"
+            self.assistant_status_text.color = SciFiColors.TEXT_SECONDARY
             
             self._assistant_add_log_entry("Stopped", SciFiColors.INFO)
             self.page.update()
@@ -1427,12 +1438,14 @@ class SecureXApp:
                         logger.info("Single command recording finished by timeout.")
                     
                     if audio_data is None:
-                        self.page.run_task(update_ui_error) # <-- FIX: Pass function
+                        # --- FIX: Pass function, not result ---
+                        self.page.run_task(update_ui_error)
                         return
                     
                     self.audio_recorder.save_audio(audio_data, str(audio_path))
                     
-                    self.page.run_task(update_ui_processing) # <-- FIX: Pass function
+                    # --- FIX: Pass function, not result ---
+                    self.page.run_task(update_ui_processing)
                     
                     transcript = self.voice_assistant.transcribe(str(audio_path))
                     if transcript.strip():
@@ -1445,16 +1458,18 @@ class SecureXApp:
                             user_id=user_id
                         )
                         
-                        # <-- FIX: Pass function and args -->
+                        # --- FIX: Pass function and args ---
                         self.page.run_task(update_ui_success, transcript, response, success)
                         self.page.run_task(self._speak_async, response)
                         
                     else:
-                        self.page.run_task(update_ui_no_speech) # <-- FIX: Pass function
+                        # --- FIX: Pass function, not result ---
+                        self.page.run_task(update_ui_no_speech)
                 
                 except Exception as e:
                     logger.error(f"Error in recording thread: {e}", exc_info=True)
-                    self.page.run_task(update_ui_exception, e) # <-- FIX: Pass function
+                    # --- FIX: Pass function and args ---
+                    self.page.run_task(update_ui_exception, e)
             
             recording_thread = threading.Thread(target=record_and_process, daemon=True)
             recording_thread.start()
@@ -1462,14 +1477,16 @@ class SecureXApp:
         except Exception as e:
             logger.error(f"Error: {e}")
             self._assistant_add_log_entry(f"Error: {e}", SciFiColors.ERROR)
-            self.assistant_status_text.value = f"Error: {e}"
-            self.assistant_status_text.color = SciFiColors.ERROR
+            if self.assistant_status_text:
+                self.assistant_status_text.value = f"Error: {e}"
+                self.assistant_status_text.color = SciFiColors.ERROR
             self.voice_assistant_active = False
             # Reset buttons
             self.assistant_start_btn.visible = True
             self.assistant_stop_btn.visible = False
             self.assistant_stop_btn.disabled = False
-            self.page.update()
+            if self.page.controls: # Check if page is still active
+                self.page.update()
 
     def _assistant_handle_voice_callback(self, transcript, response, success):
         """Handle voice callback"""
@@ -1478,7 +1495,9 @@ class SecureXApp:
                 async def update_ui():
                     self._assistant_add_log_entry(f"Heard: '{transcript}'", SciFiColors.INFO)
                     self._assistant_add_log_entry(f"Response: {response}", SciFiColors.SUCCESS if success else SciFiColors.ERROR)
-                self.page.run_task(update_ui) # <-- FIX: Pass function
+                
+                # --- FIX: Pass function, not result ---
+                self.page.run_task(update_ui)
         except Exception as e:
             logger.error(f"Callback error: {e}")
 
@@ -1497,20 +1516,24 @@ class SecureXApp:
                 ft.Container(width=6),
                 ft.Column([
                     ft.Text(f"[{timestamp}]", size=9, color=SciFiColors.TEXT_MUTED),
-                    ft.Text(message, size=11, color=SciFiColors.TEXT_PRIMARY),
-                ], spacing=2, tight=True),
-            ]),
+                    ft.Text(message, size=11, color=SciFiColors.TEXT_PRIMARY, overflow=ft.TextOverflow.VISIBLE),
+                ], spacing=2, tight=True, expand=True),
+            ], expand=True),
             margin=ft.margin.only(bottom=4),
             padding=8,
             border_radius=4,
             bgcolor=ft.Colors.with_opacity(0.3, SciFiColors.BG_ELEVATED),
         )
         
-        if self.assistant_log_content.controls is not None:
-            self.assistant_log_content.controls.append(log_entry)
-            self.page.update()
-        else:
-            logger.warning("Log content controls not initialized, skipping log entry.")
+        try:
+            if self.assistant_log_content.controls is not None:
+                self.assistant_log_content.controls.append(log_entry)
+                self.page.update()
+            else:
+                logger.warning("Log content controls not initialized, skipping log entry.")
+        except Exception as e:
+            # This can happen if page is closed
+            logger.error(f"Error updating assistant log: {e}")
 
 
     # ==================== ACTION HANDLERS ====================
@@ -1558,7 +1581,8 @@ class SecureXApp:
             await asyncio.sleep(2) # Simulate scan time
             self._show_success_toast("Security scan complete - No threats detected")
         
-        self.page.run_task(run_scan) # <-- FIX: Pass function
+        # --- FIX: Pass function, not result ---
+        self.page.run_task(run_scan)
 
 
     def _create_metric_row(self, label: str, value: str, color: str = SciFiColors.TEXT_PRIMARY):
@@ -1666,6 +1690,7 @@ class SecureXApp:
     
     def update_status(self, message: str, color: str = SciFiColors.INFO):
         """Update login status with enhanced visual feedback"""
+        if not self.status_text: return # Guard against UI not existing
         self.status_text.value = message
         self.status_text.color = color
         
@@ -1691,6 +1716,7 @@ class SecureXApp:
 
     def update_reg_status(self, message: str, color: str):
         """Update registration status with enhanced visual feedback"""
+        if not self.reg_status_text: return # Guard against UI not existing
         self.reg_status_text.value = message
         self.reg_status_text.color = color
         
@@ -1716,6 +1742,7 @@ class SecureXApp:
 
     def show_progress(self, show: bool = True):
         """Show/hide progress indicator with animation"""
+        if not self.progress_ring: return
         self.progress_ring.visible = show
         if show:
             self.progress_ring.value = None  # Indeterminate spinner
@@ -1723,6 +1750,7 @@ class SecureXApp:
 
     def show_reg_progress(self, visible: bool):
         """Show/hide registration progress indicator with animation"""
+        if not self.reg_progress_ring: return
         self.reg_progress_ring.visible = visible
         if visible:
             self.reg_progress_ring.value = None  # Indeterminate spinner
@@ -2284,8 +2312,9 @@ class SecureXApp:
             self.page.add(dashboard)
             self.page.update()
             
-            # --- FIX: Pass function to run_task, not lambda ---
-            await self.page.run_task(self._speak_async, f"Welcome back, {user['username']}")
+            # --- START FIX: Correctly call async function ---
+            await self._speak_async(f"Welcome back, {user['username']}")
+            # --- END FIX ---
             
         except Exception as e:
             logger.error(f"Voice verification error: {e}", exc_info=True)
@@ -2769,8 +2798,7 @@ class SecureXApp:
         try:
             # --- START FIX: Manually close dialogs on logout ---
             if self.voice_assistant_active:
-                self.voice_assistant.stop_continuous_listening()
-                self.voice_assistant_active = False
+                self._assistant_stop_continuous() # Use the new UI-aware stop
 
             for dialog in self.active_dialogs[:]:
                 try:
@@ -2792,7 +2820,9 @@ class SecureXApp:
         self.page.add(login)
         self.page.update()
         
-        self.page.run_task(self._speak_async, "Logged out successfully") # <-- FIX: Pass function and arg
+        # --- START FIX: Correctly call task ---
+        self.page.run_task(self._speak_async, "Logged out successfully")
+        # --- END FIX ---
 
     def _on_app_close(self, e=None):
         """Handle application shutdown"""

@@ -58,7 +58,7 @@ models:
   primary_embedding: "pyannote/embedding"
   fallback_embedding: "speechbrain/spkrec-ecapa-voxceleb"
   vad_model: "silero-vad"
-  stt_model: "vosk-model-small-en-us-0.15"
+  stt_model: "vosk-model-en-in-0.5"
 
 database:
   path: "securex_db.sqlite"
