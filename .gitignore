@@ -1,3 +1,21 @@
+# Ignore Vosk models
+vosk-model-en-in-0.5/
+vosk-model-small-en-us-0.15/
+
+# Ignore temp audio and model files
+*.onnx
+*.onnx.json
+temp_audio/
+
+# Ignore Python cache and environment
+__pycache__/
+*.pyc
+.venv/
+
+# Ignore other large files
+*.wav
+*.mp3
+*.flac
 # Environment
 .env
 venv/
