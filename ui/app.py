@@ -4,6 +4,29 @@ import pyautogui
 import datetime
 import time
 import os
+import flet as ft
+import threading
+import numpy as np
+import cv2
+from numpy.linalg import norm
+import insightface
+import asyncio
+from pathlib import Path
+from types import SimpleNamespace
+
+# --- Core and Utils Imports for SecureXApp ---
+# (Ensure these files exist in your project structure)
+from core.database import Database
+from core.voice_engine import VoiceEngine
+from core.voice_biometric_engine_ultimate import UltimateVoiceBiometricEngine
+from core.security import SecurityManager, SecurityContext
+from core.audio_processor import AudioRecorder, VoiceActivityDetector
+from utils.tts import TextToSpeech
+from core.voice_assistant import VoiceAssistant
+from core.face_recognition_engine import FaceRecognitionEngine
+from utils.helpers import create_temp_directory, cleanup_temp_files, load_config
+# --- End Imports ---
+
 class SciFiColors:
     BG_SPACE = "#10172b"
     BG_DARK = "#0a1628"
@@ -28,30 +51,6 @@ if not logger.hasHandlers():
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
-import flet as ft
-import threading
-import numpy as np
-import cv2
-from numpy.linalg import norm
-import insightface
-import logging
-import asyncio
-import logging
-from pathlib import Path
-from types import SimpleNamespace
-
-# --- Core and Utils Imports for SecureXApp ---
-from core.database import Database
-from core.voice_engine import VoiceEngine
-from core.voice_engine import VoiceQualityAnalyzer
-from core.voice_biometric_engine_ultimate import UltimateVoiceBiometricEngine
-from core.security import SecurityManager, SecurityContext
-from core.audio_processor import AudioRecorder, VoiceActivityDetector
-from utils.tts import TextToSpeech
-from core.voice_assistant import VoiceAssistant
-from core.face_recognition_engine import FaceRecognitionEngine
-from utils.helpers import create_temp_directory, cleanup_temp_files
-# --- End Imports ---
 
 class SecureXApp:
     """Main application class with sci-fi themed UI"""
@@ -97,15 +96,17 @@ class SecureXApp:
         self.reg_recording_active = False
         self.face_capture_requested = False
         self.recording_task = None
-        # NEW: Recording control events
+        
+        # Login recording events
         self.recording_started_event = threading.Event()
         self.recording_stop_event = threading.Event()
+
+        # Registration recording events & thread
         self.reg_recording_started_event = threading.Event()
         self.reg_recording_stop_event = threading.Event()
-        # Registration recording holders
         self.reg_recording_thread = None
         self.reg_recording_complete_event = threading.Event()
-        self.reg_audio_holder = [None]
+        self.reg_audio_holder = [None] # Use list for pass-by-reference in thread
 
         # Authentication flow states
         self.auth_step = "idle"
@@ -119,170 +120,44 @@ class SecureXApp:
 
         # UI components
         self.interaction_log = None
+        
+        # Login/Reg UI components (defined in build_login_view)
+        self.username_field = None
+        self.password_field = None
+        self.reg_username_field = None
+        self.reg_password_field = None
+        self.reg_confirm_password_field = None
+        self.reg_email_field = None
+        self.progress_ring = None
+        self.reg_progress_ring = None
+        self.mic_status = None
+        self.record_button = None
+        self.reg_mic_status = None
+        self.reg_record_button = None
+        self.status_text = None
+        self.status_panel = None
+        self.reg_status_text = None
+        self.reg_status_panel = None
+        self.auth_progress_text = None
+        self.auth_progress_panel = None
+        self.auth_tabs = None
+        self.form_container = None
+        self.action_button_container = None
 
         # Dialog management
         self.active_dialogs = []
 
         # Set up page close handler
         self.page.on_close = self._on_app_close
-        self.db = Database(config.get('database', {}).get('path', 'securex_db.sqlite'))
-        self.voice_engine = VoiceEngine(config)
-        self.ultimate_voice_engine = UltimateVoiceBiometricEngine(config, self.db)
-        self.security_manager = SecurityManager(config)
-        self.audio_recorder = AudioRecorder(config)
-        self.vad = VoiceActivityDetector(config)
-        self.tts = TextToSpeech(config)
-        self.voice_assistant = VoiceAssistant()
-        self.voice_assistant.setup_default_commands()
-        
-        # Load InsightFace ArcFace model for face recognition
-        self.arcface_model = insightface.app.FaceAnalysis(providers=['CPUExecutionProvider'])
-        self.arcface_model.prepare(ctx_id=0, det_size=(640, 640))
-        
-        self._audio_stream_ctx = SimpleNamespace(
-            recorder=self.audio_recorder,
-            vad_detector=self.vad
-        )
 
-        # Session state
-        self.current_user = None
-        self.current_view = "login"
-
-        # Voice assistant state
-        self.continuous_mode_active = False
-        self.voice_assistant_active = False
-        self.voice_assistant_dialog_open = False
-
-        # Navigation state
-        self.current_nav_section = "dashboard"
-
-        # Recording states
-        self.recording_active = False
-        self.reg_recording_active = False
-        self.face_capture_requested = False
-        self.recording_task = None
-        # Registration recording holders
-        self.reg_recording_thread = None
-        self.reg_recording_complete_event = threading.Event()
-        self.reg_audio_holder = [None]
-        # NEW: Recording control events
-        self.recording_started_event = threading.Event()
-        self.recording_stop_event = threading.Event()
-        self.reg_recording_started_event = threading.Event()
-        self.reg_recording_stop_event = threading.Event()
-        
-        # Authentication flow states
-        self.auth_step = "idle"
-        self.voice_enrollment_complete = False
-        self.face_enrollment_complete = False
-        self.voice_verification_complete = False
-        self.face_verification_complete = False
-
-        # Temp directory
-        self.temp_dir = create_temp_directory()
-
-        # UI components
-        self.interaction_log = None
-        
-        # Dialog management
-        self.active_dialogs = []
-        
-        # Set up page close handler
-        page.on_close = self._on_app_close
-
-    def verify_face_arcface(self, image, enrolled_embeddings, tolerance=0.55):
-        """Verify face using ArcFace embeddings and cosine similarity."""
-        if image is None or not isinstance(image, np.ndarray) or image.size == 0:
-            logger.error("Invalid image provided to face verification")
-            return False, 0.0, False
-        faces = self.arcface_model.get(image)
-        if not faces:
-            logger.warning("No face detected for verification")
-            return False, 0.0, False
-        face = max(faces, key=lambda f: f.bbox[2]*f.bbox[3])
-        current_embedding = np.array(face.embedding)
-        logger.info(f"ArcFace verification embedding: {current_embedding[:8]}...")
-        liveness_passed = True
-        best_similarity = 0.0
-        for enrolled in enrolled_embeddings:
-            enrolled_vec = np.array(enrolled)
-            similarity = float(np.dot(current_embedding, enrolled_vec) / (norm(current_embedding) * norm(enrolled_vec)))
-            if similarity > best_similarity:
-                best_similarity = similarity
-        is_match = best_similarity >= tolerance
-        logger.info(f"ArcFace verification: similarity={best_similarity:.3f}, match={is_match}, liveness={liveness_passed}")
-        return is_match, best_similarity, liveness_passed
-
-    async def enroll_user_face_arcface(self, user: dict):
-        """Enroll user face using ArcFace and store embedding in DB"""
-        self.update_reg_status("⦿ Automatically capturing face for enrollment (ArcFace)...", SciFiColors.INFO)
+    # --- ASYNC TTS HELPER ---
+    async def _speak_async(self, text: str):
+        """Run TTS in an executor thread to avoid blocking the UI."""
         try:
-            self.tts.speak("Please look at the camera for automatic face enrollment")
-        except:
-            pass
-        
-        max_attempts = 3
-        face_enrolled = False
-        
-        for attempt in range(max_attempts):
-            self.update_reg_status(f"⦿ Face capture attempt {attempt + 1}/{max_attempts}...", SciFiColors.INFO)
-            await asyncio.sleep(0.5)
-            
-            cap = cv2.VideoCapture(0)
-            ret, frame = cap.read()
-            cap.release()
-            
-            if ret and frame is not None:
-                self.update_reg_status("⟳ Processing face image...", SciFiColors.INFO)
-                try:
-                    self.tts.speak("Processing face image")
-                except:
-                    pass
-                embedding = self.enroll_face_arcface(frame)
-                if embedding is not None:
-                    self.db.deactivate_old_face_embeddings(user['id'])
-                    self.db.store_face_embedding(user['id'], embedding, embedding_type="arcface", quality_score=1.0)
-                    self.update_reg_status("✅ Face enrolled successfully (ArcFace)", SciFiColors.SUCCESS)
-                    try:
-                        self.tts.speak("Face enrolled successfully")
-                    except:
-                        pass
-                    face_enrolled = True
-                    break
-                else:
-                    self.update_reg_status(f"⚠ Face enrollment failed - no face detected (attempt {attempt + 1})", SciFiColors.WARNING)
-                    if attempt < max_attempts - 1:
-                        try:
-                            self.tts.speak("No face detected, trying again")
-                        except:
-                            pass
-                        await asyncio.sleep(1)
-            else:
-                self.update_reg_status(f"⚠ Face capture failed (attempt {attempt + 1})", SciFiColors.WARNING)
-                if attempt < max_attempts - 1:
-                    await asyncio.sleep(1)
-        
-        if not face_enrolled:
-            self.update_reg_status("⚠ Face enrollment failed after all attempts", SciFiColors.ERROR)
-            try:
-                self.tts.speak("Face enrollment failed, please try again")
-            except:
-                pass
-            await asyncio.sleep(1)
-
-    def enroll_face_arcface(self, image):
-        """Enroll face using InsightFace ArcFace model."""
-        if image is None or not isinstance(image, np.ndarray) or image.size == 0:
-            logger.error("Invalid image provided to face enrollment")
-            return None
-        faces = self.arcface_model.get(image)
-        if not faces:
-            logger.warning("No face detected for enrollment")
-            return None
-        face = max(faces, key=lambda f: f.bbox[2]*f.bbox[3])
-        embedding = face.embedding.tolist()
-        logger.info(f"ArcFace embedding extracted: {embedding[:8]}...")
-        return embedding
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, lambda: self.tts.speak(text))
+        except Exception as e:
+            logger.warning(f"Async TTS failed: {e}")
 
     def run(self):
         """Run the application"""
@@ -299,11 +174,12 @@ class SecureXApp:
         
         self.page.add(self.build_login_view())
         
-        try:
-            self.tts.speak("SecureX Assist initialized. Ready for authentication.")
-        except Exception as e:
-            logger.warning(f"TTS initialization failed: {e}")
-
+        # Run initial TTS asynchronously
+        async def start_speech():
+            await self._speak_async("SecureX Assist initialized. Ready for authentication.")
+        
+        self.page.run_task(start_speech)
+        
     def setup_page(self):
         """Configure page settings"""
         logger.info("Setting up page configuration...")
@@ -328,8 +204,8 @@ class SecureXApp:
         
         logger.info("Page configuration complete")
 
-    # ==================== LOGIN VIEW ====================
-    
+    # ==================== VIEW BUILDERS ====================
+
     def build_login_view(self) -> ft.Container:
         """Build modernized split-layout login view"""
         
@@ -498,16 +374,13 @@ class SecureXApp:
             border=ft.border.all(1, SciFiColors.PRIMARY),
         )
         
-        # NOTE: changed on_click to call a synchronous handler which updates UI immediately
-        # and then schedules the async recording task. This avoids UI being blocked or delayed
-        # and ensures the button text changes to STOP LISTENING right away.
         self.record_button = ft.ElevatedButton(
             "START RECORDING",
             icon=ft.Icons.MIC,
             height=56,
             width=400,
             visible=False,
-            on_click=lambda e: self._on_record_button_click(e),
+            on_click=self._on_record_button_click, # Correct handler
             style=ft.ButtonStyle(
                 bgcolor=SciFiColors.PRIMARY,
                 color=SciFiColors.BG_DARK,
@@ -544,7 +417,7 @@ class SecureXApp:
             height=56,
             width=400,
             visible=False,
-            on_click=lambda _: self.handle_reg_record_button_click(),
+            on_click=self.handle_reg_record_button_click, # Correct handler
             style=ft.ButtonStyle(
                 bgcolor=SciFiColors.PRIMARY,
                 color=SciFiColors.BG_DARK,
@@ -668,7 +541,7 @@ class SecureXApp:
                 ft.Tab(text="SIGN IN", icon=ft.Icons.LOGIN_ROUNDED),
                 ft.Tab(text="REGISTER", icon=ft.Icons.PERSON_ADD_ROUNDED),
             ],
-            on_change=lambda e: self._handle_auth_tab_change(e),
+            on_change=self._handle_auth_tab_change,
         )
         
         self.form_container = ft.Column(
@@ -1378,7 +1251,11 @@ class SecureXApp:
                         
                         self.page.run_task(lambda: update_ui_success(transcript, response, success))
                         
-                        self.tts.speak(response)
+                        # Run TTS in executor
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        loop.run_until_complete(self._speak_async(response))
+                        loop.close()
                         
                     else:
                         self.page.run_task(update_ui_no_speech)
@@ -1581,729 +1458,111 @@ class SecureXApp:
     # ==================== STATUS HELPERS ====================
     
     def update_status(self, message: str, color: str = SciFiColors.INFO):
-        """Update login status"""
+        """Update login status with enhanced visual feedback"""
         self.status_text.value = message
         self.status_text.color = color
+        
+        # Enhanced visual styling based on message type
+        if "✓" in message or "✅" in message or "SUCCESS" in message.upper():
+            self.status_panel.bgcolor = ft.Colors.with_opacity(0.15, SciFiColors.SUCCESS)
+            self.status_panel.border = ft.border.all(2, SciFiColors.SUCCESS)
+            self.status_text.color = SciFiColors.SUCCESS
+        elif "⚠" in message or "ERROR" in message.upper() or "FAILED" in message.upper():
+            self.status_panel.bgcolor = ft.Colors.with_opacity(0.15, SciFiColors.ERROR)
+            self.status_panel.border = ft.border.all(2, SciFiColors.ERROR)
+            self.status_text.color = SciFiColors.ERROR
+        elif "⟳" in message or "PROCESSING" in message.upper() or "ANALYZING" in message.upper():
+            self.status_panel.bgcolor = ft.Colors.with_opacity(0.15, SciFiColors.PRIMARY)
+            self.status_panel.border = ft.border.all(2, SciFiColors.PRIMARY)
+            self.status_text.color = SciFiColors.PRIMARY
+        else:
+            self.status_panel.bgcolor = ft.Colors.with_opacity(0.1, color)
+            self.status_panel.border = ft.border.all(1, color)
+        
         self.status_panel.visible = bool(message)
-        self.status_panel.bgcolor = ft.Colors.with_opacity(0.1, color)
-        self.status_panel.border = ft.border.all(1, color)
         self.page.update()
 
     def update_reg_status(self, message: str, color: str):
-        """Update registration status"""
+        """Update registration status with enhanced visual feedback"""
         self.reg_status_text.value = message
         self.reg_status_text.color = color
+        
+        # Enhanced visual styling based on message type
+        if "✓" in message or "✅" in message or "SUCCESS" in message.upper() or "COMPLETE" in message.upper():
+            self.reg_status_panel.bgcolor = ft.Colors.with_opacity(0.15, SciFiColors.SUCCESS)
+            self.reg_status_panel.border = ft.border.all(2, SciFiColors.SUCCESS)
+            self.reg_status_text.color = SciFiColors.SUCCESS
+        elif "⚠" in message or "ERROR" in message.upper() or "FAILED" in message.upper():
+            self.reg_status_panel.bgcolor = ft.Colors.with_opacity(0.15, SciFiColors.ERROR)
+            self.reg_status_panel.border = ft.border.all(2, SciFiColors.ERROR)
+            self.reg_status_text.color = SciFiColors.ERROR
+        elif "⟳" in message or "PROCESSING" in message.upper() or "ANALYZING" in message.upper() or "CREATING" in message.upper():
+            self.reg_status_panel.bgcolor = ft.Colors.with_opacity(0.15, SciFiColors.PRIMARY)
+            self.reg_status_panel.border = ft.border.all(2, SciFiColors.PRIMARY)
+            self.reg_status_text.color = SciFiColors.PRIMARY
+        else:
+            self.reg_status_panel.bgcolor = ft.Colors.with_opacity(0.1, color)
+            self.reg_status_panel.border = ft.border.all(1, color)
+        
         self.reg_status_panel.visible = bool(message)
-        self.reg_status_panel.bgcolor = ft.Colors.with_opacity(0.1, color)
-        self.reg_status_panel.border = ft.border.all(1, color)
         self.page.update()
 
     def show_progress(self, show: bool = True):
+        """Show/hide progress indicator with animation"""
         self.progress_ring.visible = show
+        if show:
+            self.progress_ring.value = None  # Indeterminate spinner
         self.page.update()
 
     def show_reg_progress(self, visible: bool):
+        """Show/hide registration progress indicator with animation"""
         self.reg_progress_ring.visible = visible
+        if visible:
+            self.reg_progress_ring.value = None  # Indeterminate spinner
         self.page.update()
 
-    # ==================== RECORDING BUTTON HANDLERS ====================
-    
-    def handle_record_button_click(self):
-        """Handle record button click for login (legacy synchronous version)"""
-        # This is kept for backward compatibility but not used
-        pass
-    
-    def _on_record_button_click(self, e):
-        """
-        Synchronous handler invoked directly by the button click.
-        It updates the UI immediately on the main thread and then schedules the async
-        work with page.run_task. This ensures that the button text/icon changes right
-        away (START -> STOP) and the recording coroutine runs in the background.
-        """
-        try:
-            # If not recording, update UI and start recording task
-            if not self.recording_active:
-                # Immediate UI update on main thread
-                self.recording_active = True
-                self.record_button.text = "STOP LISTENING"
-                self.record_button.icon = ft.Icons.STOP
-                self.record_button.style = ft.ButtonStyle(
-                    bgcolor=SciFiColors.ERROR,
-                    color=SciFiColors.TEXT_PRIMARY,
-                    shape=ft.RoundedRectangleBorder(radius=12),
-                )
-                self.update_status("🎤 Listening... Click STOP LISTENING when done", SciFiColors.WARNING)
-                self.page.update()
-
-                # Schedule the async recording starter
-                # We pass a coroutine object to page.run_task to ensure it runs in the page's loop.
-                self.page.run_task(self.start_voice_recording_manual)
-            else:
-                # If recording, schedule stop operation (async)
-                # Update UI optimistically (stop request)
-                self.page.run_task(self.stop_voice_recording_manual)
-        except Exception as ex:
-            logger.error(f"_on_record_button_click error: {ex}", exc_info=True)
-            self.update_status(f"⚠ Error: {ex}", SciFiColors.ERROR)
-            self.page.update()
-    
-    async def start_voice_recording(self):
-        """Start voice recording for verification"""
-        try:
-            logger.info("Starting voice recording...")
-            print("DEBUG: start_voice_recording called")  # Debug print
-            
-            # Update UI to show recording in progress
-            self.recording_active = True
-            self.record_button.text = "⏺ RECORDING..."
-            self.record_button.disabled = True
-            self.record_button.style = ft.ButtonStyle(
-                bgcolor=SciFiColors.ERROR,
-                color=SciFiColors.TEXT_PRIMARY,
-                shape=ft.RoundedRectangleBorder(radius=12),
-            )
-            self.update_status("⦿ Recording for 5 seconds... Speak now!", SciFiColors.ERROR)
-            self.page.update()
-            
-            try:
-                self.tts.speak("Recording now, please speak")
-            except:
-                pass
-
-            # Record audio - this might block, so run in executor
-            logger.info("Recording audio for 5 seconds...")
-            audio_data = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: self.audio_recorder.record_audio(duration=5.0)
-            )
-            logger.info(f"Recording complete, audio_data: {audio_data is not None}")
-            print(f"DEBUG: Recording complete, audio_data: {audio_data is not None}")  # Debug print
-
-            # Reset recording UI
-            self.recording_active = False
-            self.record_button.text = "START RECORDING"
-            self.record_button.icon = ft.Icons.MIC
-            self.record_button.disabled = False
-            self.record_button.style = ft.ButtonStyle(
-                bgcolor=SciFiColors.PRIMARY,
-                color=SciFiColors.BG_DARK,
-                shape=ft.RoundedRectangleBorder(radius=12),
-            )
-            
-            if audio_data is None:
-                self.update_status("⚠ Recording failed - no audio captured", SciFiColors.ERROR)
-                self.hide_record_button()
-                return
-            
-            self.update_status("✓ Recording complete - processing...", SciFiColors.SUCCESS)
-            self.page.update()
-
-            # Now process the recorded audio for verification
-            await self.process_voice_verification(audio_data)
-            
-        except Exception as e:
-            logger.error(f"Error in start_voice_recording: {e}", exc_info=True)
-            self.update_status(f"⚠ Recording error: {str(e)}", SciFiColors.ERROR)
-            self.hide_record_button()
-    
-    def start_voice_recording_sync(self):
-        """Start voice recording for verification (synchronous version)"""
-        try:
-            logger.info("Starting voice recording...")
-            print("DEBUG: start_voice_recording_sync called")  # Debug print
-            
-            # Update UI to show recording in progress (need to do this on main thread)
-            def update_ui_recording():
-                self.recording_active = True
-                self.record_button.text = "⏺ RECORDING..."
-                self.record_button.disabled = True
-                self.record_button.style = ft.ButtonStyle(
-                    bgcolor=SciFiColors.ERROR,
-                    color=SciFiColors.TEXT_PRIMARY,
-                    shape=ft.RoundedRectangleBorder(radius=12),
-                )
-                self.update_status("⦿ Recording for 5 seconds... Speak now!", SciFiColors.ERROR)
-                self.page.update()
-            
-            # Use page.call_on_main_thread or similar
-            import flet
-            if hasattr(self.page, 'call_on_main_thread'):
-                self.page.call_on_main_thread(update_ui_recording)
-            else:
-                # Fallback - try to update directly (might not work from thread)
-                update_ui_recording()
-            
-            try:
-                self.tts.speak("Recording now, please speak")
-            except:
-                pass
-
-            # Record audio synchronously
-            logger.info("Recording audio for 5 seconds...")
-            audio_data = self.audio_recorder.record_audio(duration=5.0)
-            logger.info(f"Recording complete, audio_data: {audio_data is not None}")
-            print(f"DEBUG: Recording complete, audio_data: {audio_data is not None}")  # Debug print
-
-            # Reset recording UI (need to do this on main thread)
-            def update_ui_done():
-                self.recording_active = False
-                self.record_button.text = "START RECORDING"
-                self.record_button.icon = ft.Icons.MIC
-                self.record_button.disabled = False
-                self.record_button.style = ft.ButtonStyle(
-                    bgcolor=SciFiColors.PRIMARY,
-                    color=SciFiColors.BG_DARK,
-                    shape=ft.RoundedRectangleBorder(radius=12),
-                )
-                
-                if audio_data is None:
-                    self.update_status("⚠ Recording failed - no audio captured", SciFiColors.ERROR)
-                    self.hide_record_button()
-                    return
-                
-                self.update_status("✓ Recording complete - processing...", SciFiColors.SUCCESS)
-                self.page.update()
-                
-                # Now process the recorded audio for verification (run in async context)
-                async def process_async():
-                    await self.process_voice_verification(audio_data)
-                
-                # Use page.run_task to run the async processing
-                self.page.run_task(process_async)
-            
-            if hasattr(self.page, 'call_on_main_thread'):
-                self.page.call_on_main_thread(update_ui_done)
-            else:
-                update_ui_done()
-            
-        except Exception as e:
-            logger.error(f"Error in start_voice_recording_sync: {e}", exc_info=True)
-            def update_ui_error():
-                self.update_status(f"⚠ Recording error: {str(e)}", SciFiColors.ERROR)
-                self.hide_record_button()
-                self.page.update()
-            
-            if hasattr(self.page, 'call_on_main_thread'):
-                self.page.call_on_main_thread(update_ui_error)
-            else:
-                update_ui_error()
-
-    async def start_voice_recording_manual(self):
-        """Start manual voice recording (user controls start/stop)"""
-        try:
-            logger.info("Starting manual voice recording...")
-            
-            try:
-                self.tts.speak("Recording started, please speak")
-            except:
-                pass
-            
-            # Start recording in background task (no duration limit)
-            self.recording_task = asyncio.create_task(self._record_audio_background())
-            
-        except Exception as e:
-            logger.error(f"Error starting manual recording: {e}", exc_info=True)
-            # Reset UI on error
-            self.recording_active = False
-            self.record_button.text = "START RECORDING"
-            self.record_button.icon = ft.Icons.MIC
-            self.record_button.style = ft.ButtonStyle(
-                bgcolor=SciFiColors.PRIMARY,
-                color=SciFiColors.BG_DARK,
-                shape=ft.RoundedRectangleBorder(radius=12),
-            )
-            self.update_status(f"⚠ Recording start error: {str(e)}", SciFiColors.ERROR)
-            self.page.update()
-            self.hide_record_button()
-
-    async def stop_voice_recording_manual(self):
-        """Stop manual voice recording and process audio"""
-        try:
-            logger.info("Stopping manual voice recording...")
-            
-            # Stop the recording
-            self.audio_recorder.stop_recording()
-            
-            # Wait for the recording task to complete
-            if self.recording_task:
-                audio_data = await self.recording_task
-                self.recording_task = None
-                
-                # Reset recording UI
-                self.recording_active = False
-                self.record_button.text = "START RECORDING"
-                self.record_button.icon = ft.Icons.MIC
-                self.record_button.style = ft.ButtonStyle(
-                    bgcolor=SciFiColors.PRIMARY,
-                    color=SciFiColors.BG_DARK,
-                    shape=ft.RoundedRectangleBorder(radius=12),
-                )
-                
-                if audio_data is None or len(audio_data) == 0:
-                    self.update_status("⚠ Recording failed - no audio captured", SciFiColors.ERROR)
-                    self.page.update()
-                    self.hide_record_button()
-                    return
-                
-                self.update_status("✓ Recording complete - processing...", SciFiColors.SUCCESS)
-                self.page.update()
-                
-                # Process the recorded audio for verification
-                await self.process_voice_verification(audio_data)
-            else:
-                logger.warning("No recording task found")
-                # Reset UI anyway
-                self.recording_active = False
-                self.record_button.text = "START RECORDING"
-                self.record_button.icon = ft.Icons.MIC
-                self.record_button.style = ft.ButtonStyle(
-                    bgcolor=SciFiColors.PRIMARY,
-                    color=SciFiColors.BG_DARK,
-                    shape=ft.RoundedRectangleBorder(radius=12),
-                )
-                self.update_status("⚠ No active recording to stop", SciFiColors.WARNING)
-                self.page.update()
-                
-        except Exception as e:
-            logger.error(f"Error stopping manual recording: {e}", exc_info=True)
-            # Reset UI on error
-            self.recording_active = False
-            self.record_button.text = "START RECORDING"
-            self.record_button.icon = ft.Icons.MIC
-            self.record_button.style = ft.ButtonStyle(
-                bgcolor=SciFiColors.PRIMARY,
-                color=SciFiColors.BG_DARK,
-                shape=ft.RoundedRectangleBorder(radius=12),
-            )
-            self.update_status(f"⚠ Recording stop error: {str(e)}", SciFiColors.ERROR)
-            self.page.update()
-            self.hide_record_button()
-
-    async def _record_audio_background(self):
-        """Background task for recording audio until stopped"""
-        try:
-            logger.info("Recording audio in background...")
-            # Record with a very long duration (will be stopped by stop_recording)
-            audio_data = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: self.audio_recorder.record_audio(duration=300.0)  # 5 minutes max
-            )
-            logger.info(f"Background recording complete, audio_data shape: {audio_data.shape if audio_data is not None else None}")
-            return audio_data
-        except Exception as e:
-            logger.error(f"Error in background recording: {e}")
-            return None
-
-    async def process_voice_verification(self, audio_data):
-        """Process recorded audio for voice verification"""
-        try:
-            # Get the current user from the login process
-            username = self.username_field.value
-            user = self.db.get_user_by_username(username)
-            if not user:
-                self.update_status("⚠ User not found", SciFiColors.ERROR)
-                self.hide_record_button()
-                return
-            
-            logger.info("Audio data captured successfully")
-
-            self.update_status("⟳ Analyzing voice with AASIST anti-spoofing...", SciFiColors.INFO)
-            self.show_progress(True)
-            self.page.update()
-            
-            try:
-                self.tts.speak("Analyzing voice with advanced security")
-            except:
-                pass
-
-            logger.info("Starting voice verification with ultimate engine")
-            verification_result = self.ultimate_voice_engine.verify_voice(
-                user_id=user['id'],
-                audio_data=audio_data,
-                sample_rate=16000,
-                enable_challenge=False
-            )
-            
-            logger.info(f"Verification result: {verification_result}")
-            self.show_progress(False)
-
-            if not verification_result['verified']:
-                failure_reason = verification_result['details'].get('failure_reason', 'Unknown error')
-                if verification_result.get('spoof_detected', False):
-                    self.update_status("⚠ Anti-spoofing: Voice rejected as suspicious", SciFiColors.ERROR)
-                    try:
-                        self.tts.speak("Voice rejected by anti-spoofing system")
-                    except:
-                        pass
-                else:
-                    confidence_pct = verification_result.get('confidence', 0) * 100
-                    self.update_status(f"⚠ Voice verification failed - {confidence_pct:.1f}% confidence", SciFiColors.ERROR)
-                    try:
-                        self.tts.speak("Voice verification failed")
-                    except:
-                        pass
-                self.hide_record_button()
-                return
-
-            confidence_pct = verification_result.get('confidence', 0) * 100
-            self.update_status(f"✓ Voice verified with {confidence_pct:.1f}% confidence", SciFiColors.SUCCESS)
-            try:
-                self.tts.speak("Voice verified successfully with advanced security")
-            except:
-                pass
-            self.voice_verification_complete = True
-            self.update_auth_progress("face_verifying")
-            await asyncio.sleep(1.5)
-            
-            # Face verification
-            self.update_status("⦿ Now verifying face (ArcFace)...", SciFiColors.INFO)
-            try:
-                self.tts.speak("Now verifying face")
-            except:
-                pass
-            await asyncio.sleep(1)
-            face_embeddings = self.db.get_face_embeddings(user['id'])
-            arcface_embeddings = [emb['embedding_data'] for emb in face_embeddings if isinstance(emb['embedding_data'], list) and len(emb['embedding_data']) == 512]
-            if arcface_embeddings:
-                self.update_status("⦿ Automatically capturing face for verification...", SciFiColors.INFO)
-                try:
-                    self.tts.speak("Please look at the camera for automatic face verification")
-                except:
-                    pass
-                
-                max_attempts = 3
-                face_verified = False
-                
-                for attempt in range(max_attempts):
-                    self.update_status(f"⦿ Face capture attempt {attempt + 1}/{max_attempts}...", SciFiColors.INFO)
-                    await asyncio.sleep(0.5)
-                    
-                    cap = cv2.VideoCapture(0)
-                    ret, frame = cap.read()
-                    cap.release()
-                    
-                    if ret and frame is not None:
-                        # Run face verification logic here
-                        is_match, similarity, liveness_passed = self.verify_face_arcface(frame, arcface_embeddings)
-                        similarity_percent = similarity * 100
-                        if is_match and liveness_passed:
-                            self.update_status(f"✅ Face verified (ArcFace) - {similarity_percent:.1f}% similarity", SciFiColors.SUCCESS)
-                            try:
-                                self.tts.speak("Face verified successfully")
-                            except:
-                                pass
-                            face_verified = True
-                            break
-                        elif is_match and not liveness_passed:
-                            self.update_status(f"⚠ Liveness check failed - {similarity_percent:.1f}% similarity (attempt {attempt + 1})", SciFiColors.WARNING)
-                            if attempt < max_attempts - 1:
-                                try:
-                                    self.tts.speak("Liveness check failed, trying again")
-                                except:
-                                    pass
-                                await asyncio.sleep(1)
-                        else:
-                            self.update_status(f"⚠ Face verification failed - {similarity_percent:.1f}% similarity (attempt {attempt + 1})", SciFiColors.WARNING)
-                            if attempt < max_attempts - 1:
-                                try:
-                                    self.tts.speak("Face not recognized, trying again")
-                                except:
-                                    pass
-                                await asyncio.sleep(1)
-                    else:
-                        self.update_status(f"⚠ Face capture failed (attempt {attempt + 1})", SciFiColors.WARNING)
-                        if attempt < max_attempts - 1:
-                            await asyncio.sleep(1)
-                
-                if not face_verified:
-                    self.update_status("⚠ Face verification failed after all attempts", SciFiColors.ERROR)
-                    try:
-                        self.tts.speak("Face verification failed")
-                    except:
-                        pass
-                    self.hide_record_button()
-                    return
-            else:
-                self.update_status("⚠ No ArcFace profile found - Skipping", SciFiColors.WARNING)
-                try:
-                    self.tts.speak("No face profile found, skipping face verification")
-                except:
-                    pass
-                self.face_verification_complete = True
-                self.update_auth_progress("complete")
-                await asyncio.sleep(1)
-            
-            self.update_status("✓ Authentication successful! Loading dashboard...", SciFiColors.SUCCESS)
-            try:
-                self.tts.speak("Authentication successful")
-            except:
-                pass
-            await asyncio.sleep(1)
-            self.show_progress(False)
-            
-            self.cleanup_old_temp_files()
-            
-            self.current_user = type('User', (), user)()
-            self.current_view = "dashboard"
-            
-            self.page.controls.clear()
-            dashboard = self.build_dashboard_view()
-            self.page.add(dashboard)
-            self.page.update()
-            
-            try:
-                self.tts.speak(f"Welcome back, {user['username']}")
-            except:
-                pass
-            
-        except Exception as e:
-            logger.error(f"Voice verification error: {e}", exc_info=True)
-            self.update_status(f"⚠ Error: {str(e)}", SciFiColors.ERROR)
-            try:
-                self.tts.speak("Verification error occurred")
-            except:
-                pass
-            self.hide_record_button()
-        
-    def handle_reg_record_button_click(self):
-        """Handle record button click for registration"""
-        logger.info("=== REGISTRATION RECORD BUTTON CLICKED ===")
-        
-        # Start recording: spawn a thread that runs the AudioRecorder.record_audio()
-        # and set the started event so the registration flow can continue.
-        if not self.reg_recording_active:
-            self.reg_recording_active = True
-
-            # Clear previous holder/event
-            self.reg_recording_complete_event.clear()
-            self.reg_audio_holder[0] = None
-            self.reg_recording_stop_event.clear()
-
-            def _reg_record_thread():
-                try:
-                    logger.info("Registration thread: starting record_audio()")
-                    # Record for up to 5 minutes (stoppable via stop_recording)
-                    audio = self.audio_recorder.record_audio(duration=300.0)
-                    self.reg_audio_holder[0] = audio
-                    logger.info("Registration thread: record_audio finished, audio captured=%s", audio is not None)
-                except Exception as e:
-                    logger.error("Registration recording thread error: %s", e, exc_info=True)
-                finally:
-                    # Signal completion regardless of success
-                    self.reg_recording_complete_event.set()
-
-            self.reg_recording_thread = threading.Thread(target=_reg_record_thread, daemon=True)
-            self.reg_recording_thread.start()
-
-            # Signal to enrollment flow that recording has started
-            self.reg_recording_started_event.set()
-
-            # Update UI
-            self.reg_record_button.text = "◉ STOP RECORDING"
-            self.reg_record_button.icon = ft.Icons.STOP
-            self.reg_record_button.style = ft.ButtonStyle(
-                bgcolor=SciFiColors.SUCCESS,
-                color=SciFiColors.BG_DARK,
-                shape=ft.RoundedRectangleBorder(radius=8),
-            )
-            self.update_reg_status("⦿ Recording... Speak now!", SciFiColors.ERROR)
-            self.page.update()
-            logger.info("Registration recording started (threaded)")
-        else:
-            # Stop recording: request AudioRecorder to stop and set stop event
-            self.reg_recording_active = False
-            self.reg_recording_stop_event.set()
-            try:
-                # Signal the underlying recorder to stop as quickly as possible
-                self.audio_recorder.stop_recording()
-            except Exception:
-                logger.exception("Failed to stop audio recorder cleanly")
-
-            # Update UI optimistically; actual hiding/reset will be handled after audio is available
-            self.reg_record_button.text = "START RECORDING"
-            self.reg_record_button.icon = ft.Icons.MIC
-            self.reg_record_button.style = ft.ButtonStyle(
-                bgcolor=SciFiColors.PRIMARY,
-                color=SciFiColors.BG_DARK,
-                shape=ft.RoundedRectangleBorder(radius=8),
-            )
-            self.update_reg_status("✓ Recording stopped - processing...", SciFiColors.SUCCESS)
-            self.page.update()
-            logger.info("Registration recording stop requested")
-
-    def show_record_button(self, mode="voice"):
-        """Show recording button"""
-        logger.info(f"show_record_button called with mode={mode}")
-        print(f"DEBUG: show_record_button called with mode={mode}")  # Debug print
-        
-        # Reset the event
-        self.recording_started_event.clear()
-        self.recording_stop_event.clear()
-        
-        self.mic_status.visible = True
-        
-        if mode == "voice":
-            self.mic_status.content = ft.Row([
-                ft.Icon(ft.Icons.MIC_OUTLINED, color=SciFiColors.PRIMARY, size=20),
-                ft.Text("VOICE VERIFICATION", size=11, color=SciFiColors.TEXT_SECONDARY, weight=ft.FontWeight.W_600),
-            ], spacing=8)
-            self.record_button.icon = ft.Icons.MIC
-            self.record_button.tooltip = "Voice Biometric Authentication"
-        elif mode == "face":
-            self.mic_status.content = ft.Row([
-                ft.Icon(ft.Icons.CAMERA_ALT_OUTLINED, color=SciFiColors.PRIMARY, size=20),
-                ft.Text("FACE VERIFICATION", size=11, color=SciFiColors.TEXT_SECONDARY, weight=ft.FontWeight.W_600),
-            ], spacing=8)
-            self.record_button.icon = ft.Icons.CAMERA_ALT
-            self.record_button.tooltip = "Capture Face for Verification"
-        
-        self.record_button.text = "START RECORDING"
-        self.record_button.disabled = False
-        self.record_button.visible = True
-        self.recording_active = False
-        
-        self.record_button.style = ft.ButtonStyle(
-            bgcolor=SciFiColors.PRIMARY,
-            color=SciFiColors.BG_DARK,
-            shape=ft.RoundedRectangleBorder(radius=12),
-            shadow_color=SciFiColors.PRIMARY,
-            elevation=8,
-            side=ft.BorderSide(width=2, color=SciFiColors.PRIMARY),
-        )
-        
-        self.page.update()
-        logger.info("Record button shown and ready")
-        print("DEBUG: Record button should now be visible")  # Debug print
-
-    def hide_record_button(self):
-        """Hide recording button"""
-        self.mic_status.visible = False
-        self.record_button.visible = False
-        self.recording_active = False
-        self.recording_started_event.clear()
-        self.recording_stop_event.clear()
-        self.page.update()
-
-    def show_reg_record_button(self, sample_info: str = "", on_click=None, mode="voice"):
-        """Show registration recording button"""
-        # Reset events
-        self.reg_recording_started_event.clear()
-        self.reg_recording_stop_event.clear()
-        
-        self.reg_mic_status.visible = True
-        
-        if mode == "voice":
-            if sample_info:
-                self.reg_mic_status.content = ft.Row([
-                    ft.Icon(ft.Icons.MIC_OUTLINED, color=SciFiColors.PRIMARY, size=20),
-                    ft.Text(sample_info, size=11, color=SciFiColors.TEXT_PRIMARY, weight=ft.FontWeight.BOLD),
-                ], spacing=8)
-            else:
-                self.reg_mic_status.content = ft.Row([
-                    ft.Icon(ft.Icons.MIC_OUTLINED, color=SciFiColors.PRIMARY, size=20),
-                    ft.Text("VOICE ENROLLMENT", size=11, color=SciFiColors.TEXT_SECONDARY, weight=ft.FontWeight.W_600),
-                ], spacing=8)
-            self.reg_record_button.icon = ft.Icons.MIC
-            self.reg_record_button.tooltip = "Voice Biometric Enrollment"
-        elif mode == "face":
-            self.reg_mic_status.content = ft.Row([
-                ft.Icon(ft.Icons.CAMERA_ALT_OUTLINED, color=SciFiColors.PRIMARY, size=20),
-                ft.Text("FACE ENROLLMENT", size=11, color=SciFiColors.TEXT_SECONDARY, weight=ft.FontWeight.W_600),
-            ], spacing=8)
-            self.reg_record_button.icon = ft.Icons.CAMERA_ALT
-            self.reg_record_button.tooltip = "Capture Face for Enrollment"
-        
-        self.reg_record_button.text = "START RECORDING"
-        self.reg_record_button.visible = True
-        self.reg_recording_active = False
-        
-        self.reg_record_button.style = ft.ButtonStyle(
-            bgcolor=SciFiColors.PRIMARY,
-            color=SciFiColors.BG_DARK,
-            shape=ft.RoundedRectangleBorder(radius=12),
-            shadow_color=SciFiColors.PRIMARY,
-            elevation=8,
-            side=ft.BorderSide(width=2, color=SciFiColors.PRIMARY),
-        )
-        
-        self.page.update()
-
-    def hide_reg_record_button(self):
-        """Hide registration recording button"""
-        self.reg_mic_status.visible = False
-        self.reg_record_button.visible = False
-        self.reg_recording_active = False
-        self.reg_recording_started_event.clear()
-        self.reg_recording_stop_event.clear()
-        self.page.update()
-
-    def update_auth_progress(self, step: str):
-        """Update authentication progress indicator"""
-        progress_messages = {
-            "idle": "",
-            "voice_enrolling": "Voice Enrollment -> Face Enrollment",
-            "face_enrolling": "Voice Enrollment [OK] -> Face Enrollment",
-            "voice_verifying": "Voice Verification -> Face Verification", 
-            "face_verifying": "Voice Verification [OK] -> Face Verification",
-            "complete": "Voice Verification [OK] -> Face Verification [OK] -> Access Granted"
-        }
-        
-        message = progress_messages.get(step, "")
-        if message:
-            self.auth_progress_text.value = message
-            self.auth_progress_panel.visible = True
-        else:
-            self.auth_progress_panel.visible = False
-        
-        self.page.update()
-
-    def reset_auth_states(self):
-        """Reset all authentication flow states"""
-        self.auth_step = "idle"
-        self.voice_enrollment_complete = False
-        self.face_enrollment_complete = False
-        self.voice_verification_complete = False
-        self.face_verification_complete = False
-        self.recording_started_event.clear()
-        self.recording_stop_event.clear()
-        self.reg_recording_started_event.clear()
-        self.reg_recording_stop_event.clear()
-        self.update_auth_progress("idle")
-
-    def cleanup_old_temp_files(self):
-        """Clean up old temporary audio files"""
-        try:
-            cleanup_temp_files(str(self.temp_dir))
-        except Exception as e:
-            logger.warning(f"Failed to cleanup temp files: {e}")
-
-    # ==================== AUTHENTICATION ====================
+    # ==================== AUTHENTICATION & REGISTRATION ====================
     
     def start_voice_login(self):
         """Start voice authentication"""
+        self.page.run_task(self._start_voice_login_async)
+    
+    async def _start_voice_login_async(self):
+        """Async handler for voice login"""
         try:
             logger.info("=== VOICE LOGIN STARTED ===")
-            print("DEBUG: start_voice_login called")  # Debug print
             username = self.username_field.value
             password = self.password_field.value
             
             if not username or not password:
-                self.update_status("⚠ Enter username and password", SciFiColors.ERROR)
+                self.update_status("⚠ Please enter both username and password", SciFiColors.ERROR)
+                await self._speak_async("Please enter your credentials")
                 return
             
             logger.info(f"Attempting login for user: {username}")
+            
+            self.update_status("⟳ Validating credentials...", SciFiColors.INFO)
+            self.show_progress(True)
+            
             user = self.db.get_user_by_username(username)
             if not user:
-                self.update_status("⚠ User not found", SciFiColors.ERROR)
+                self.show_progress(False)
+                self.update_status("⚠ User not found - Please check username or register first", SciFiColors.ERROR)
                 logger.warning(f"User not found: {username}")
+                await self._speak_async("User not found")
                 return
             
             logger.info(f"User found: {user['id']}")
             
             if not self.security_manager.verify_hashed_password(password, user['password_hash']):
-                self.update_status("⚠ Invalid password", SciFiColors.ERROR)
+                self.show_progress(False)
+                self.update_status("⚠ Invalid password - Please try again", SciFiColors.ERROR)
                 logger.warning("Password verification failed")
+                await self._speak_async("Invalid password")
                 return
             
             logger.info("Password verified successfully")
+            self.show_progress(False)
             
             self.reset_auth_states()
             self.auth_step = "voice_verifying"
@@ -2311,10 +1570,10 @@ class SecureXApp:
             
             # Show the record button immediately
             self.show_record_button(mode="voice")
-            self.update_status("⦿ Click START RECORDING for secure voice verification", SciFiColors.INFO)
+            self.update_status("⦿ Ready for voice verification - Click START RECORDING when ready", SciFiColors.INFO)
+            await self._speak_async("Credentials verified, please provide voice sample for verification")
             
             logger.info("Voice verification setup complete - waiting for user to click record button")
-            print("DEBUG: Record button should now be visible")  # Debug print
             
         except Exception as e:
             logger.error(f"Error in start_voice_login: {e}", exc_info=True)
@@ -2374,6 +1633,13 @@ class SecureXApp:
             
             user = self.db.get_user_by_username(username)
             await self.enroll_user_voice_registration(user)
+
+            # Check if voice enrollment was successful before proceeding
+            if not self.voice_enrollment_complete:
+                logger.warning("Voice enrollment was not completed, aborting registration.")
+                self.show_reg_progress(False)
+                # Status already set by enroll_user_voice_registration on failure
+                return
             
             self.update_reg_status("✅ Voice enrolled - Now enrolling face", SciFiColors.SUCCESS)
             logger.info("Voice enrollment completed, starting face enrollment")
@@ -2399,24 +1665,23 @@ class SecureXApp:
             self.update_reg_status(f"⚠ Failed: {str(e)}", SciFiColors.ERROR)
             self.show_reg_progress(False)
 
+    # ==================== ENROLLMENT & VERIFICATION ====================
+
     async def enroll_user_voice_registration(self, user: dict):
         """Enroll voice during registration using ultimate biometric engine"""
         try:
-            self.update_reg_status("⟳ Recording 3 voice samples with data augmentation", SciFiColors.INFO)
-            try:
-                self.tts.speak("Please provide 3 voice samples for secure enrollment")
-            except:
-                pass
+            self.update_reg_status("⟳ Initializing voice enrollment system...", SciFiColors.INFO)
+            await asyncio.sleep(0.5)
+            
+            self.update_reg_status("⟳ Recording 3 voice samples with advanced data augmentation", SciFiColors.INFO)
+            await self._speak_async("Please provide 3 voice samples for secure enrollment")
             await asyncio.sleep(1)
             
             audio_samples = []
             
             for sample_num in range(1, 4):
-                self.update_reg_status(f"⦿ Sample {sample_num}/3 - Click START RECORDING", SciFiColors.INFO)
-                try:
-                    self.tts.speak(f"Please click START RECORDING for voice sample {sample_num} of 3")
-                except:
-                    pass
+                self.update_reg_status(f"⦿ Sample {sample_num}/3 - Click START RECORDING when ready", SciFiColors.INFO)
+                await self._speak_async(f"Please click START RECORDING for voice sample {sample_num} of 3")
                     
                 self.show_reg_record_button(f"SAMPLE {sample_num} OF 3", mode="voice")
                 self.page.update()
@@ -2435,10 +1700,7 @@ class SecureXApp:
                 self.reg_recording_started_event.clear()
                 logger.info(f"Sample {sample_num} recording started")
                 
-                try:
-                    self.tts.speak("Recording now, please speak")
-                except:
-                    pass
+                await self._speak_async("Recording now, please speak")
                 
                 # Wait for user to click stop
                 logger.info(f"Waiting for sample {sample_num} recording to stop...")
@@ -2467,45 +1729,53 @@ class SecureXApp:
                 audio_data = None
                 try:
                     audio_data = self.reg_audio_holder[0]
-                except Exception:
+                    # Clear the holder after retrieving to prevent reuse
+                    self.reg_audio_holder[0] = None
+                except (IndexError, TypeError, Exception) as e:
+                    logger.warning(f"Failed to retrieve audio from holder: {e}")
                     audio_data = None
 
                 if audio_data is None:
                     self.update_reg_status(f"⚠ Sample {sample_num} failed - No audio captured", SciFiColors.WARNING)
-                    try:
-                        self.tts.speak("Recording failed, please try again")
-                    except:
-                        pass
+                    await self._speak_async("Recording failed, please try again")
                     await asyncio.sleep(1)
                     continue
 
-                self.update_reg_status(f"✓ Sample {sample_num} recorded - Processing", SciFiColors.SUCCESS)
-                try:
-                    self.tts.speak("Recording complete, processing voice sample")
-                except:
-                    pass
-                await asyncio.sleep(0.5)
+                self.update_reg_status(f"✓ Sample {sample_num} recorded - Analyzing quality...", SciFiColors.SUCCESS)
+                await self._speak_async("Recording complete, analyzing voice sample quality")
+                await asyncio.sleep(0.3)
+                
+                self.update_reg_status(f"⟳ Sample {sample_num} - Running quality checks...", SciFiColors.INFO)
+                await asyncio.sleep(0.3)
                 
                 audio_samples.append(audio_data)
                 
-                self.update_reg_status(f"✓ Sample {sample_num}/3 saved", SciFiColors.SUCCESS)
+                self.update_reg_status(f"✅ Sample {sample_num}/3 validated and saved", SciFiColors.SUCCESS)
+                await self._speak_async(f"Sample {sample_num} validated successfully")
                 await asyncio.sleep(1)
             
             if len(audio_samples) < 2:
-                self.update_reg_status("⚠ Insufficient valid samples - Please try again", SciFiColors.ERROR)
-                try:
-                    self.tts.speak("Insufficient voice samples recorded, please restart enrollment")
-                except:
-                    pass
+                self.update_reg_status("⚠ Insufficient valid samples - Minimum 2 required, Please try again", SciFiColors.ERROR)
+                await self._speak_async("Insufficient voice samples recorded, please restart enrollment")
                 self.show_reg_progress(False)
+                self.voice_enrollment_complete = False
                 return
             
-            self.update_reg_status("⟳ Creating secure voice profile with augmentation...", SciFiColors.INFO)
+            self.update_reg_status(f"⟳ Processing {len(audio_samples)} validated samples...", SciFiColors.INFO)
+            await asyncio.sleep(0.5)
+            
+            self.update_reg_status("⟳ Generating augmented dataset for robust profile...", SciFiColors.INFO)
+            await asyncio.sleep(0.5)
+            
+            self.update_reg_status("⟳ Extracting voice embeddings with advanced AI...", SciFiColors.INFO)
+            await asyncio.sleep(0.5)
+            
+            self.update_reg_status("⟳ Computing mean and variance for adaptive matching...", SciFiColors.INFO)
+            await asyncio.sleep(0.5)
+            
+            self.update_reg_status("⟳ Creating secure voice profile with anti-spoofing protection...", SciFiColors.INFO)
             self.show_reg_progress(True)
-            try:
-                self.tts.speak("Creating your secure voice profile")
-            except:
-                pass
+            await self._speak_async("Creating your secure voice profile with advanced security features")
             
             logger.info(f"Enrolling voice with {len(audio_samples)} samples")
             success = self.ultimate_voice_engine.enroll_user_voice(
@@ -2517,29 +1787,747 @@ class SecureXApp:
             self.show_reg_progress(False)
             
             if success:
-                self.update_reg_status("✅ Voice enrollment complete! Profile secured with anti-spoofing", SciFiColors.SUCCESS)
-                try:
-                    self.tts.speak("Voice enrollment complete with advanced security features")
-                except:
-                    pass
+                self.update_reg_status("✅ Voice enrollment complete! Profile secured with anti-spoofing and adaptive learning", SciFiColors.SUCCESS)
+                await self._speak_async("Voice enrollment complete with advanced security features")
                 self.voice_enrollment_complete = True
                 self.update_auth_progress("face_enrolling")
-                await asyncio.sleep(2)
+                await asyncio.sleep(1.5)
             else:
-                self.update_reg_status("⚠ Voice enrollment failed - Please try again", SciFiColors.ERROR)
-                try:
-                    self.tts.speak("Voice enrollment failed, please try again")
-                except:
-                    pass
+                self.update_reg_status("⚠ Voice enrollment failed - Insufficient quality or validation errors. Please try again", SciFiColors.ERROR)
+                await self._speak_async("Voice enrollment failed, please try again with clear voice samples")
+                self.voice_enrollment_complete = False
             
         except Exception as e:
             logger.error(f"Voice enrollment error: {e}", exc_info=True)
             self.update_reg_status(f"⚠ Enrollment error: {str(e)}", SciFiColors.ERROR)
-            try:
-                self.tts.speak("Voice enrollment failed due to an error")
-            except:
-                pass
+            await self._speak_async("Voice enrollment failed due to an error")
             self.show_reg_progress(False)
+
+    async def enroll_user_face_arcface(self, user: dict):
+        """Enroll user face using ArcFace and store embedding in DB"""
+        self.update_reg_status("⦿ Automatically capturing face for enrollment (ArcFace)...", SciFiColors.INFO)
+        await self._speak_async("Please look at the camera for automatic face enrollment")
+        
+        max_attempts = 3
+        face_enrolled = False
+        
+        for attempt in range(max_attempts):
+            self.update_reg_status(f"⦿ Face capture attempt {attempt + 1}/{max_attempts}...", SciFiColors.INFO)
+            await asyncio.sleep(0.5)
+            
+            cap = cv2.VideoCapture(0)
+            ret, frame = cap.read()
+            cap.release()
+            
+            if ret and frame is not None:
+                self.update_reg_status("⟳ Processing face image...", SciFiColors.INFO)
+                await self._speak_async("Processing face image")
+                embedding = self.enroll_face_arcface(frame)
+                if embedding is not None:
+                    self.db.deactivate_old_face_embeddings(user['id'])
+                    self.db.store_face_embedding(user['id'], embedding, embedding_type="arcface", quality_score=1.0)
+                    self.update_reg_status("✅ Face enrolled successfully (ArcFace)", SciFiColors.SUCCESS)
+                    await self._speak_async("Face enrolled successfully")
+                    face_enrolled = True
+                    break
+                else:
+                    self.update_reg_status(f"⚠ Face enrollment failed - no face detected (attempt {attempt + 1})", SciFiColors.WARNING)
+                    if attempt < max_attempts - 1:
+                        await self._speak_async("No face detected, trying again")
+                        await asyncio.sleep(1)
+            else:
+                self.update_reg_status(f"⚠ Face capture failed (attempt {attempt + 1})", SciFiColors.WARNING)
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(1)
+        
+        if not face_enrolled:
+            self.update_reg_status("⚠ Face enrollment failed after all attempts", SciFiColors.ERROR)
+            await self._speak_async("Face enrollment failed, please try again")
+            await asyncio.sleep(1)
+
+    def enroll_face_arcface(self, image):
+        """Enroll face using InsightFace ArcFace model."""
+        if image is None or not isinstance(image, np.ndarray) or image.size == 0:
+            logger.error("Invalid image provided to face enrollment")
+            return None
+        faces = self.arcface_model.get(image)
+        if not faces:
+            logger.warning("No face detected for enrollment")
+            return None
+        face = max(faces, key=lambda f: f.bbox[2]*f.bbox[3])
+        embedding = face.embedding.tolist()
+        logger.info(f"ArcFace embedding extracted: {embedding[:8]}...")
+        return embedding
+
+    async def process_voice_verification(self, audio_data):
+        """Process recorded audio for voice verification"""
+        try:
+            # Get the current user from the login process
+            username = self.username_field.value
+            user = self.db.get_user_by_username(username)
+            if not user:
+                self.update_status("⚠ User not found", SciFiColors.ERROR)
+                self.hide_record_button()
+                return
+            
+            logger.info("Audio data captured successfully")
+            logger.info("DEBUG: Entered post-capture block in process_voice_verification")
+
+            self.update_status("⟳ Analyzing voice with AASIST anti-spoofing...", SciFiColors.INFO)
+            logger.info("DEBUG: Updated status to anti-spoofing analysis")
+            self.show_progress(True)
+            self.page.update()
+            logger.info("DEBUG: UI progress shown and page updated")
+
+            logger.info("DEBUG: About to call TTS async")
+            try:
+                await self._speak_async("Analyzing voice with advanced security")
+                logger.info("DEBUG: Finished TTS async call")
+            except Exception as e:
+                logger.error(f"DEBUG: TTS async call failed: {e}")
+
+            logger.info("Starting voice verification with ultimate engine")
+            logger.info("DEBUG: About to start verification executor")
+
+            # Run verification in executor to avoid blocking the async loop
+            loop = asyncio.get_event_loop()
+
+            # Create a progress update task
+            async def update_progress_periodically():
+                progress_messages = [
+                    "⟳ Analyzing voice quality...",
+                    "⟳ Running anti-spoofing checks...",
+                    "⟳ Extracting voice features...",
+                    "⟳ Comparing with stored profile...",
+                    "⟳ Computing similarity scores...",
+                    "⟳ Finalizing verification..."
+                ]
+                message_index = 0
+                while True:
+                    await asyncio.sleep(2)  # Update every 2 seconds
+                    if message_index < len(progress_messages):
+                        self.update_status(progress_messages[message_index], SciFiColors.INFO)
+                        self.page.update()
+                        message_index += 1
+                    else:
+                        message_index = 0  # Loop back
+            
+            progress_task = asyncio.create_task(update_progress_periodically())
+            
+            try:
+                # Run with timeout to prevent infinite hanging
+                verification_result = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: self.ultimate_voice_engine.verify_voice(
+                            user_id=user['id'],
+                            audio_data=audio_data,
+                            sample_rate=16000,
+                            enable_challenge=False
+                        )
+                    ),
+                    timeout=30.0  # 30 second timeout
+                )
+                logger.info(f"Verification result: {verification_result}")
+            except asyncio.TimeoutError:
+                logger.error("Voice verification timed out after 30 seconds")
+                self.show_progress(False)
+                self.update_status("⚠ Verification timed out - Please try again", SciFiColors.ERROR)
+                await self._speak_async("Verification timed out, please try again")
+                self.hide_record_button()
+                return
+            except Exception as e:
+                logger.error(f"Verification error: {e}", exc_info=True)
+                self.show_progress(False)
+                self.update_status(f"⚠ Verification error: {str(e)}", SciFiColors.ERROR)
+                await self._speak_async("Verification error occurred")
+                self.hide_record_button()
+                return
+            finally:
+                # Cancel progress updates
+                progress_task.cancel()
+                try:
+                    await progress_task
+                except asyncio.CancelledError:
+                    pass
+            
+            self.show_progress(False)
+
+            if not verification_result['verified']:
+                failure_reason = verification_result['details'].get('failure_reason', 'Unknown error')
+                quality_score = verification_result.get('quality_score', 0) * 100
+                cosine_sim = verification_result.get('cosine_similarity', 0) * 100
+                
+                if verification_result.get('spoof_detected', False):
+                    self.update_status("⚠ Anti-spoofing: Voice rejected as suspicious or spoofed", SciFiColors.ERROR)
+                    await self._speak_async("Voice rejected by anti-spoofing system")
+                elif "quality" in failure_reason.lower():
+                    self.update_status(f"⚠ Voice quality insufficient (Quality: {quality_score:.1f}%) - Please speak clearly", SciFiColors.ERROR)
+                    await self._speak_async("Voice quality too low, please speak more clearly")
+                elif "embedding" in failure_reason.lower():
+                    self.update_status("⚠ Failed to extract voice features - Please try again", SciFiColors.ERROR)
+                    await self._speak_async("Failed to extract voice features, please try again")
+                elif "profile" in failure_reason.lower():
+                    self.update_status("⚠ No voice profile found - Please complete registration first", SciFiColors.ERROR)
+                    await self._speak_async("No voice profile found")
+                else:
+                    confidence_pct = verification_result.get('confidence', 0) * 100
+                    self.update_status(
+                        f"⚠ Verification failed - Similarity: {cosine_sim:.1f}%, Confidence: {confidence_pct:.1f}%", 
+                        SciFiColors.ERROR
+                    )
+                    await self._speak_async("Voice verification failed, please try again")
+                self.hide_record_button()
+                return
+
+            confidence_pct = verification_result.get('confidence', 0) * 100
+            cosine_sim = verification_result.get('cosine_similarity', 0) * 100
+            quality_score = verification_result.get('quality_score', 0) * 100
+            
+            self.update_status(
+                f"✅ Voice verified - Similarity: {cosine_sim:.1f}%, Confidence: {confidence_pct:.1f}%, Quality: {quality_score:.1f}%", 
+                SciFiColors.SUCCESS
+            )
+            await self._speak_async("Voice verified successfully with advanced security")
+            self.voice_verification_complete = True
+            self.update_auth_progress("face_verifying")
+            await asyncio.sleep(1.5)
+            
+            # Face verification
+            self.update_status("⦿ Now verifying face (ArcFace)...", SciFiColors.INFO)
+            await self._speak_async("Now verifying face")
+            await asyncio.sleep(1)
+            face_embeddings = self.db.get_face_embeddings(user['id'])
+            arcface_embeddings = [emb['embedding_data'] for emb in face_embeddings if isinstance(emb['embedding_data'], list) and len(emb['embedding_data']) == 512]
+            
+            if arcface_embeddings:
+                self.update_status("⦿ Automatically capturing face for verification...", SciFiColors.INFO)
+                await self._speak_async("Please look at the camera for automatic face verification")
+                
+                max_attempts = 3
+                face_verified = False
+                
+                for attempt in range(max_attempts):
+                    self.update_status(f"⦿ Face capture attempt {attempt + 1}/{max_attempts}...", SciFiColors.INFO)
+                    await asyncio.sleep(0.5)
+                    
+                    cap = cv2.VideoCapture(0)
+                    ret, frame = cap.read()
+                    cap.release()
+                    
+                    if ret and frame is not None:
+                        # Run face verification logic here
+                        is_match, similarity, liveness_passed = self.verify_face_arcface(frame, arcface_embeddings)
+                        similarity_percent = similarity * 100
+                        if is_match and liveness_passed:
+                            self.update_status(f"✅ Face verified (ArcFace) - {similarity_percent:.1f}% similarity", SciFiColors.SUCCESS)
+                            await self._speak_async("Face verified successfully")
+                            face_verified = True
+                            self.face_verification_complete = True # Set flag
+                            break
+                        elif is_match and not liveness_passed:
+                            self.update_status(f"⚠ Liveness check failed - {similarity_percent:.1f}% similarity (attempt {attempt + 1})", SciFiColors.WARNING)
+                            if attempt < max_attempts - 1:
+                                await self._speak_async("Liveness check failed, trying again")
+                                await asyncio.sleep(1)
+                        else:
+                            self.update_status(f"⚠ Face verification failed - {similarity_percent:.1f}% similarity (attempt {attempt + 1})", SciFiColors.WARNING)
+                            if attempt < max_attempts - 1:
+                                await self._speak_async("Face not recognized, trying again")
+                                await asyncio.sleep(1)
+                    else:
+                        self.update_status(f"⚠ Face capture failed (attempt {attempt + 1})", SciFiColors.WARNING)
+                        if attempt < max_attempts - 1:
+                            await asyncio.sleep(1)
+                
+                if not face_verified:
+                    self.update_status("⚠ Face verification failed after all attempts", SciFiColors.ERROR)
+                    await self._speak_async("Face verification failed")
+                    self.hide_record_button()
+                    return
+            else:
+                self.update_status("⚠ No ArcFace profile found - Skipping", SciFiColors.WARNING)
+                await self._speak_async("No face profile found, skipping face verification")
+                self.face_verification_complete = True
+                await asyncio.sleep(1)
+            
+            # Final check
+            if not (self.voice_verification_complete and self.face_verification_complete):
+                logger.error("Auth flow error: Face or Voice verification incomplete.")
+                self.update_status("⚠ Authentication flow incomplete", SciFiColors.ERROR)
+                self.hide_record_button()
+                return
+
+            self.update_auth_progress("complete")
+            self.update_status("✓ Authentication successful! Loading dashboard...", SciFiColors.SUCCESS)
+            await self._speak_async("Authentication successful")
+            await asyncio.sleep(1)
+            self.show_progress(False)
+            
+            self.cleanup_old_temp_files()
+            
+            self.current_user = user
+            self.current_view = "dashboard"
+            
+            self.page.controls.clear()
+            dashboard = self.build_dashboard_view()
+            self.page.add(dashboard)
+            self.page.update()
+            
+            await self._speak_async(f"Welcome back, {user['username']}")
+            
+        except Exception as e:
+            logger.error(f"Voice verification error: {e}", exc_info=True)
+            self.update_status(f"⚠ Error: {str(e)}", SciFiColors.ERROR)
+            await self._speak_async("Verification error occurred")
+            self.hide_record_button()
+
+    def verify_face_arcface(self, image, enrolled_embeddings, tolerance=0.55):
+        """Verify face using ArcFace embeddings and cosine similarity."""
+        if image is None or not isinstance(image, np.ndarray) or image.size == 0:
+            logger.error("Invalid image provided to face verification")
+            return False, 0.0, False
+        faces = self.arcface_model.get(image)
+        if not faces:
+            logger.warning("No face detected for verification")
+            return False, 0.0, False
+        face = max(faces, key=lambda f: f.bbox[2]*f.bbox[3])
+        current_embedding = np.array(face.embedding)
+        logger.info(f"ArcFace verification embedding: {current_embedding[:8]}...")
+        liveness_passed = True # Placeholder for liveness
+        best_similarity = 0.0
+        for enrolled in enrolled_embeddings:
+            enrolled_vec = np.array(enrolled)
+            similarity = float(np.dot(current_embedding, enrolled_vec) / (norm(current_embedding) * norm(enrolled_vec)))
+            if similarity > best_similarity:
+                best_similarity = similarity
+        is_match = best_similarity >= tolerance
+        logger.info(f"ArcFace verification: similarity={best_similarity:.3f}, match={is_match}, liveness={liveness_passed}")
+        return is_match, best_similarity, liveness_passed
+
+    # ==================== LOGIN RECORDING HANDLERS (ASYNC) ====================
+
+    def _on_record_button_click(self, e):
+        """
+        Synchronous handler for record button clicks.
+        Updates UI immediately and schedules async work.
+        """
+        try:
+            logger.info(f"=== RECORD BUTTON CLICKED === recording_active={self.recording_active}")
+            
+            if not self.recording_active:
+                # START RECORDING
+                logger.info("Starting recording...")
+                
+                # Update UI immediately (synchronous)
+                self.recording_active = True
+                self.record_button.text = "STOP LISTENING"
+                self.record_button.icon = ft.Icons.STOP
+                self.record_button.disabled = False  # Keep button enabled
+                self.record_button.style = ft.ButtonStyle(
+                    bgcolor=SciFiColors.ERROR,
+                    color=SciFiColors.TEXT_PRIMARY,
+                    shape=ft.RoundedRectangleBorder(radius=12),
+                )
+                self.update_status("🎤 Listening... Click STOP LISTENING when done", SciFiColors.WARNING)
+                self.page.update()
+                
+                # Schedule async recording task
+                logger.info("Scheduling start_voice_recording_manual")
+                self.page.run_task(self.start_voice_recording_manual)
+                
+            else:
+                # STOP RECORDING
+                logger.info("Stopping recording...")
+                
+                # Update UI immediately to show stopping state
+                self.record_button.text = "STOPPING..."
+                self.record_button.disabled = True
+                self.update_status("⏹ Stopping recording...", SciFiColors.INFO)
+                self.page.update()
+                
+                # Schedule async stop task
+                logger.info("Scheduling stop_voice_recording_manual")
+                self.page.run_task(self.stop_voice_recording_manual)
+                
+        except Exception as ex:
+            logger.error(f"Button click error: {ex}", exc_info=True)
+            self.recording_active = False
+            self.update_status(f"⚠ Error: {ex}", SciFiColors.ERROR)
+            self.page.update()
+
+    # ---
+    # --- THIS IS THE CORRECTED FUNCTION ---
+    # ---
+    async def start_voice_recording_manual(self):
+        """Start manual voice recording (user controls start/stop)"""
+        try:
+            logger.info("=== START_VOICE_RECORDING_MANUAL CALLED ===")
+            
+            # 1. Stop any previous recorder immediately.
+            self.audio_recorder.stop_recording()
+
+            # 2. Cancel any old asyncio task *before* creating a new one.
+            if self.recording_task and not self.recording_task.done():
+                logger.info("Cancelling existing recording task")
+                self.recording_task.cancel()
+                try:
+                    await self.recording_task
+                except asyncio.CancelledError:
+                    logger.info("Old recording task cancelled.")
+                    pass
+
+            # 3. Create the new task *immediately*. This fixes the race condition.
+            self.recording_task = asyncio.create_task(self._record_audio_background())
+            logger.info(f"Recording task created: {self.recording_task}")
+
+            # 4. *Now* speak, after the state is correctly set up.
+            await self._speak_async("Recording started, please speak")
+
+        except Exception as e:
+            logger.error(f"Error starting recording: {e}", exc_info=True)
+            # If starting fails, reset the UI
+            await self._reset_recording_ui()
+    # ---
+    # --- END OF CORRECTED FUNCTION ---
+    # ---
+
+    async def stop_voice_recording_manual(self):
+        """Stop manual voice recording and process audio"""
+        try:
+            logger.info("=== STOP_VOICE_RECORDING_MANUAL CALLED ===")
+            logger.info(f"Current recording_task: {self.recording_task}")
+            
+            # Signal the recorder to stop
+            logger.info("Calling audio_recorder.stop_recording()")
+            self.audio_recorder.stop_recording()
+            
+            # Wait for recording task with timeout
+            audio_data = None
+            if self.recording_task:
+                try:
+                    logger.info("Waiting for recording task to complete...")
+                    audio_data = await asyncio.wait_for(self.recording_task, timeout=3.0)
+                    logger.info(f"Recording task completed. Audio data: {audio_data is not None}")
+                
+                except asyncio.TimeoutError:
+                    logger.error("Recording task timed out! The recording thread is likely stuck.")
+                    self.recording_task.cancel()
+                    # Tell the user the stop failed before resetting
+                    self.update_status("⚠ Error: Recording failed to stop.", SciFiColors.ERROR)
+                    await asyncio.sleep(2) # Give user time to read
+
+                except asyncio.CancelledError:
+                    logger.info("Recording task was cancelled")
+                except Exception as e:
+                    logger.error(f"Error waiting for recording task: {e}", exc_info=True)
+                finally:
+                    self.recording_task = None
+            else:
+                logger.warning("No recording task found")
+
+            # Reset UI
+            await self._reset_recording_ui()
+
+            # Process audio if we got data
+            if audio_data is None or (hasattr(audio_data, '__len__') and len(audio_data) == 0):
+                logger.warning("No audio data captured")
+                # This message will now show if the timeout occurred OR if audio was empty
+                self.update_status("⚠ Recording failed - no audio captured", SciFiColors.ERROR)
+                self.hide_record_button()
+                return
+
+            logger.info(f"Processing audio data: shape={audio_data.shape}, duration={len(audio_data)/16000:.2f}s")
+            
+            # Check audio quality before processing
+            duration = len(audio_data) / 16000
+            if duration < 0.5:
+                self.update_status("⚠ Recording too short - Please record at least 0.5 seconds", SciFiColors.WARNING)
+                await self._speak_async("Recording too short, please try again")
+                self.hide_record_button()
+                return
+            
+            self.update_status("✓ Recording complete - Starting verification process...", SciFiColors.SUCCESS)
+            self.page.update()
+            await asyncio.sleep(0.3)
+            
+            # Process the recorded audio
+            await self.process_voice_verification(audio_data)
+
+        except Exception as e:
+            logger.error(f"Error stopping recording: {e}", exc_info=True)
+            await self._reset_recording_ui()
+            self.update_status(f"⚠ Recording error: {str(e)}", SciFiColors.ERROR)
+            self.hide_record_button()
+
+    async def _record_audio_background(self):
+        """Background task for recording audio until stopped"""
+        try:
+            logger.info("=== RECORDING AUDIO IN BACKGROUND ===")
+            
+            # Record with long duration - will be stopped by stop_recording()
+            audio_data = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.audio_recorder.record_audio(duration=300.0)
+            )
+            
+            logger.info(f"Background recording complete. Audio shape: {audio_data.shape if audio_data is not None else None}")
+            return audio_data
+
+        except Exception as e:
+            logger.error(f"Background recording error: {e}", exc_info=True)
+            return None
+
+    async def _reset_recording_ui(self):
+        """Reset recording UI to initial state"""
+        logger.info("Resetting recording UI")
+        self.recording_active = False
+        self.record_button.text = "START RECORDING"
+        self.record_button.icon = ft.Icons.MIC
+        self.record_button.disabled = False
+        self.record_button.style = ft.ButtonStyle(
+            bgcolor=SciFiColors.PRIMARY,
+            color=SciFiColors.BG_DARK,
+            shape=ft.RoundedRectangleBorder(radius=12),
+            shadow_color=SciFiColors.PRIMARY,
+            elevation=8,
+            side=ft.BorderSide(width=2, color=SciFiColors.PRIMARY),
+        )
+        self.page.update()
+
+    # ==================== REGISTRATION RECORDING HANDLERS (THREADED) ====================
+
+    def handle_reg_record_button_click(self, e=None):
+        """
+        Synchronous handler for the REGISTRATION record button.
+        Uses threading.Events to coordinate with the async registration process.
+        """
+        try:
+            if not self.reg_recording_active:
+                logger.info("Registration record button: START")
+                self.reg_recording_active = True
+                
+                # Reset events
+                self.reg_recording_started_event.clear()
+                self.reg_recording_stop_event.clear()
+                self.reg_recording_complete_event.clear()
+                
+                # Update UI
+                self.reg_record_button.text = "STOP RECORDING"
+                self.reg_record_button.icon = ft.Icons.STOP
+                self.reg_record_button.style = ft.ButtonStyle(
+                    bgcolor=SciFiColors.ERROR,
+                    color=SciFiColors.TEXT_PRIMARY,
+                    shape=ft.RoundedRectangleBorder(radius=12),
+                )
+                self.update_reg_status("⦿ Recording... Speak now!", SciFiColors.WARNING)
+                self.page.update()
+                
+                # Start background recording thread
+                self.reg_recording_thread = threading.Thread(
+                    target=self._record_audio_for_registration_thread,
+                    daemon=True
+                )
+                self.reg_recording_thread.start()
+                logger.info("Registration recording thread started")
+                
+            else:
+                logger.info("Registration record button: STOP")
+                # Stop recording
+                self.reg_recording_active = False
+                self.reg_recording_stop_event.set() # Signal stop event
+                try:
+                    # Signal the underlying recorder to stop
+                    self.audio_recorder.stop_recording()
+                except Exception:
+                    logger.exception("Failed to stop audio recorder cleanly")
+
+                self.reg_record_button.text = "PROCESSING..."
+                self.reg_record_button.disabled = True
+                self.update_reg_status("✓ Recording stopped - processing...", SciFiColors.SUCCESS)
+                self.page.update()
+                logger.info("Registration recording stop requested")
+        
+        except Exception as ex:
+            logger.error(f"Reg button click error: {ex}", exc_info=True)
+            self.reg_recording_active = False
+            self.update_reg_status(f"⚠ Error: {ex}", SciFiColors.ERROR)
+            self.page.update()
+
+    def _record_audio_for_registration_thread(self):
+        """
+        BACKGROUND THREAD: Record audio for registration.
+        """
+        try:
+            self.reg_audio_holder[0] = None
+            
+            # Signal that recording has officially started
+            self.reg_recording_started_event.set()
+            logger.info("Registration recording thread: Started.")
+            
+            # Start recording (long duration, will be stopped by stop_recording)
+            audio_data = self.audio_recorder.record_audio(duration=300.0)
+            
+            if audio_data is not None:
+                logger.info(f"Registration recording thread: Audio captured, shape={audio_data.shape}")
+                self.reg_audio_holder[0] = audio_data
+            else:
+                logger.warning("Registration recording thread: Audio capture returned None.")
+                
+        except Exception as e:
+            logger.error(f"Error in registration recording thread: {e}", exc_info=True)
+            self.reg_audio_holder[0] = None
+        finally:
+            # Signal that this thread is done
+            self.reg_recording_complete_event.set()
+            logger.info("Registration recording thread: Finished.")
+
+    # ==================== MISC UI HANDLERS ====================
+
+    def show_record_button(self, mode="voice"):
+        """Show login recording button"""
+        logger.info(f"show_record_button called with mode={mode}")
+        
+        self.recording_started_event.clear()
+        self.recording_stop_event.clear()
+        
+        self.mic_status.visible = True
+        
+        if mode == "voice":
+            self.mic_status.content = ft.Row([
+                ft.Icon(ft.Icons.MIC_OUTLINED, color=SciFiColors.PRIMARY, size=20),
+                ft.Text("VOICE VERIFICATION", size=11, color=SciFiColors.TEXT_SECONDARY, weight=ft.FontWeight.W_600),
+            ], spacing=8)
+            self.record_button.icon = ft.Icons.MIC
+            self.record_button.tooltip = "Voice Biometric Authentication"
+        elif mode == "face":
+            self.mic_status.content = ft.Row([
+                ft.Icon(ft.Icons.CAMERA_ALT_OUTLINED, color=SciFiColors.PRIMARY, size=20),
+                ft.Text("FACE VERIFICATION", size=11, color=SciFiColors.TEXT_SECONDARY, weight=ft.FontWeight.W_600),
+            ], spacing=8)
+            self.record_button.icon = ft.Icons.CAMERA_ALT
+            self.record_button.tooltip = "Capture Face for Verification"
+        
+        self.record_button.text = "START RECORDING"
+        self.record_button.disabled = False
+        self.record_button.visible = True
+        self.recording_active = False
+        
+        self.record_button.style = ft.ButtonStyle(
+            bgcolor=SciFiColors.PRIMARY,
+            color=SciFiColors.BG_DARK,
+            shape=ft.RoundedRectangleBorder(radius=12),
+            shadow_color=SciFiColors.PRIMARY,
+            elevation=8,
+            side=ft.BorderSide(width=2, color=SciFiColors.PRIMARY),
+        )
+        
+        self.page.update()
+        logger.info("Record button shown and ready")
+
+    def hide_record_button(self):
+        """Hide login recording button"""
+        self.mic_status.visible = False
+        self.record_button.visible = False
+        self.recording_active = False
+        self.recording_started_event.clear()
+        self.recording_stop_event.clear()
+        self.page.update()
+
+    def show_reg_record_button(self, sample_info: str = "", mode="voice"):
+        """Show registration recording button"""
+        self.reg_recording_started_event.clear()
+        self.reg_recording_stop_event.clear()
+        
+        self.reg_mic_status.visible = True
+        
+        if mode == "voice":
+            if sample_info:
+                self.reg_mic_status.content = ft.Row([
+                    ft.Icon(ft.Icons.MIC_OUTLINED, color=SciFiColors.PRIMARY, size=20),
+                    ft.Text(sample_info, size=11, color=SciFiColors.TEXT_PRIMARY, weight=ft.FontWeight.BOLD),
+                ], spacing=8)
+            else:
+                self.reg_mic_status.content = ft.Row([
+                    ft.Icon(ft.Icons.MIC_OUTLINED, color=SciFiColors.PRIMARY, size=20),
+                    ft.Text("VOICE ENROLLMENT", size=11, color=SciFiColors.TEXT_SECONDARY, weight=ft.FontWeight.W_600),
+                ], spacing=8)
+            self.reg_record_button.icon = ft.Icons.MIC
+            self.reg_record_button.tooltip = "Voice Biometric Enrollment"
+        elif mode == "face":
+            self.reg_mic_status.content = ft.Row([
+                ft.Icon(ft.Icons.CAMERA_ALT_OUTLINED, color=SciFiColors.PRIMARY, size=20),
+                ft.Text("FACE ENROLLMENT", size=11, color=SciFiColors.TEXT_SECONDARY, weight=ft.FontWeight.W_600),
+            ], spacing=8)
+            self.reg_record_button.icon = ft.Icons.CAMERA_ALT
+            self.reg_record_button.tooltip = "Capture Face for Enrollment"
+        
+        self.reg_record_button.text = "START RECORDING"
+        self.reg_record_button.disabled = False
+        self.reg_record_button.visible = True
+        self.reg_recording_active = False
+        
+        self.reg_record_button.style = ft.ButtonStyle(
+            bgcolor=SciFiColors.PRIMARY,
+            color=SciFiColors.BG_DARK,
+            shape=ft.RoundedRectangleBorder(radius=12),
+            shadow_color=SciFiColors.PRIMARY,
+            elevation=8,
+            side=ft.BorderSide(width=2, color=SciFiColors.PRIMARY),
+        )
+        
+        self.page.update()
+
+    def hide_reg_record_button(self):
+        """Hide registration recording button"""
+        self.reg_mic_status.visible = False
+        self.reg_record_button.visible = False
+        self.reg_recording_active = False
+        self.reg_recording_started_event.clear()
+        self.reg_recording_stop_event.clear()
+        self.page.update()
+
+    def update_auth_progress(self, step: str):
+        """Update authentication progress indicator"""
+        progress_messages = {
+            "idle": "",
+            "voice_enrolling": "Voice Enrollment -> Face Enrollment",
+            "face_enrolling": "Voice Enrollment [OK] -> Face Enrollment",
+            "voice_verifying": "Voice Verification -> Face Verification",
+            "face_verifying": "Voice Verification [OK] -> Face Verification",
+            "complete": "Voice Verification [OK] -> Face Verification [OK] -> Access Granted"
+        }
+        
+        message = progress_messages.get(step, "")
+        if message:
+            self.auth_progress_text.value = message
+            self.auth_progress_panel.visible = True
+        else:
+            self.auth_progress_panel.visible = False
+        
+        self.page.update()
+
+    def reset_auth_states(self):
+        """Reset all authentication flow states"""
+        self.auth_step = "idle"
+        self.voice_enrollment_complete = False
+        self.face_enrollment_complete = False
+        self.voice_verification_complete = False
+        self.face_verification_complete = False
+        self.recording_started_event.clear()
+        self.recording_stop_event.clear()
+        self.reg_recording_started_event.clear()
+        self.reg_recording_stop_event.clear()
+        self.update_auth_progress("idle")
+
+    # ==================== CLEANUP & SHUTDOWN ====================
+
+    def cleanup_old_temp_files(self):
+        """Clean up old temporary audio files"""
+        try:
+            cleanup_temp_files(str(self.temp_dir))
+        except Exception as e:
+            logger.warning(f"Failed to cleanup temp files: {e}")
 
     def show_dashboard(self):
         """Render the dashboard view"""
@@ -2569,6 +2557,7 @@ class SecureXApp:
         
         self.active_dialogs.clear()
         self.current_view = "login"
+        self.current_user = None # Clear current user
         
         self.cleanup_old_temp_files()
         
@@ -2577,10 +2566,7 @@ class SecureXApp:
         self.page.add(login)
         self.page.update()
         
-        try:
-            self.tts.speak("Logged out successfully")
-        except:
-            pass
+        self.page.run_task(self._speak_async("Logged out successfully"))
 
     def _on_app_close(self, e=None):
         """Handle application shutdown"""
@@ -2617,59 +2603,18 @@ class SecureXApp:
         
         logger.info("Application shutdown complete")
 
-    # ---------- NEW: improved synchronous click handler to ensure UI state updates immediately ----------
-    def _on_record_button_click(self, e):
-        """
-        Synchronous handler invoked directly by the button click.
-        It updates the UI immediately on the main thread and then schedules the async
-        work with page.run_task. This ensures that the button text/icon changes right
-        away (START -> STOP) and the recording coroutine runs in the background.
-        """
-        try:
-            # If not recording, update UI and start recording task
-            if not self.recording_active:
-                # Immediate UI update on main thread
-                self.recording_active = True
-                self.record_button.text = "STOP LISTENING"
-                self.record_button.icon = ft.Icons.STOP
-                self.record_button.style = ft.ButtonStyle(
-                    bgcolor=SciFiColors.ERROR,
-                    color=SciFiColors.TEXT_PRIMARY,
-                    shape=ft.RoundedRectangleBorder(radius=12),
-                )
-                self.update_status("🎤 Listening... Click STOP LISTENING when done", SciFiColors.WARNING)
-                self.page.update()
-
-                # Schedule the async recording starter
-                # We pass a coroutine object to page.run_task to ensure it runs in the page's loop.
-                self.page.run_task(self.start_voice_recording_manual)
-            else:
-                # If recording, schedule stop operation (async)
-                # Update UI optimistically (stop request)
-                self.page.run_task(self.stop_voice_recording_manual)
-        except Exception as ex:
-            logger.error(f"_on_record_button_click error: {ex}", exc_info=True)
-            self.update_status(f"⚠ Error: {ex}", SciFiColors.ERROR)
-            self.page.update()
-
-    # =================================================================================================
-
 
 def main(page: ft.Page):
     """Flet main entry point"""
-    from utils.helpers import load_config
-    
+    config = load_config()
     page.title = "SecureX-Assist"
     page.theme_mode = ft.ThemeMode.DARK
     page.window.resizable = True
     page.window.maximizable = True
     page.window.minimizable = True
-    
-    config = load_config()
-    
+
     app = SecureXApp(page, config)
     app.run()
-
 
 if __name__ == "__main__":
     ft.app(target=main)

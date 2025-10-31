@@ -63,12 +63,19 @@ class VoiceEngine:
         Returns True if at least one model loads successfully
         """
         try:
+            # Fast path: allow config to prefer lightweight backend
+            prefer_basic = self.config.get('models', {}).get('prefer_basic', False)
+            fast_mode = self.config.get('system', {}).get('fast_mode', False)
+            if prefer_basic or fast_mode:
+                logger.info("Fast mode / prefer_basic enabled - using basic MFCC backend")
+                self.active_backend = "basic"
+                return True
             # Try loading primary model (pyannote/embedding)
             logger.info("Loading primary model: pyannote/embedding")
             from pyannote.audio import Model, Inference
             
             model_name = self.config.get('models', {}).get('primary_embedding', 'pyannote/embedding')
-            self.primary_model = Model.from_pretrained(model_name, use_auth_token=True)
+            self.primary_model = Model.from_pretrained(model_name, use_auth_token=False)
             self.inference = Inference(self.primary_model, window="whole")
             self.active_backend = "pyannote"
             

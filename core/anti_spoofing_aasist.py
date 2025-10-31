@@ -31,7 +31,7 @@ class AAISTAntiSpoofingEngine:
     Detects replay attacks, deepfakes, and other voice spoofing attempts.
     """
     
-    def __init__(self, device: str = "cpu"):
+    def __init__(self, device: str = "cpu", force_fallback: bool = False):
         """
         Initialize AASIST anti-spoofing model.
         
@@ -43,29 +43,32 @@ class AAISTAntiSpoofingEngine:
         
         try:
             logger.info("Loading AASIST anti-spoofing model...")
-            
-            # Try loading via torch.hub (ESPnet integration)
-            # This is the SOTA anti-spoofing model
-            try:
-                # Load AASIST model from ESPnet
-                self.model = torch.hub.load(
-                    'espnet/espnet',
-                    'espnet_model',
-                    preprocess='none',
-                    lang_id='multilingual',
-                    task='asr',
-                    domain='espnet'
-                )
-                logger.info("✅ AASIST model loaded from torch.hub")
-            except:
-                logger.warning("Could not load from torch.hub, using fallback classifier...")
-                # Fallback: Use a simple but effective classifier
+
+            # Allow callers/config to force the lightweight fallback (skip torch.hub entirely)
+            if force_fallback:
+                logger.info("Force fallback enabled - skipping torch.hub load")
                 self.model = None
                 self.use_fallback = True
-            
+            else:
+                # Try loading via torch.hub (ESPnet integration). This can be slow on first run.
+                try:
+                    self.model = torch.hub.load(
+                        'espnet/espnet',
+                        'espnet_model',
+                        preprocess='none',
+                        lang_id='multilingual',
+                        task='asr',
+                        domain='espnet'
+                    )
+                    logger.info("✅ AASIST model loaded from torch.hub")
+                except Exception as _:
+                    logger.warning("Could not load from torch.hub, using fallback classifier...")
+                    self.model = None
+                    self.use_fallback = True
+
             logger.info(f"   - Device: {self.device}")
             logger.info(f"   - Sample rate: {self.sample_rate} Hz")
-            
+
         except Exception as e:
             logger.error(f"Warning: Could not load AASIST model: {e}")
             logger.info("Will use spectral analysis fallback for anti-spoofing")
@@ -93,8 +96,26 @@ class AAISTAntiSpoofingEngine:
                     resampler = torchaudio.transforms.Resample(sample_rate, self.sample_rate)
                     waveform = resampler(waveform)
             else:
-                waveform = torch.from_numpy(audio_file_or_array).unsqueeze(0).float()
-                if waveform.dim() > 2:
+                # Handle numpy array input
+                if isinstance(audio_file_or_array, np.ndarray):
+                    # Ensure it's 1D or 2D (mono or multi-channel)
+                    if audio_file_or_array.ndim == 1:
+                        waveform = torch.from_numpy(audio_file_or_array).unsqueeze(0).float()
+                    elif audio_file_or_array.ndim == 2:
+                        # If shape is (samples, channels), transpose to (channels, samples)
+                        if audio_file_or_array.shape[0] > audio_file_or_array.shape[1]:
+                            waveform = torch.from_numpy(audio_file_or_array.T).float()
+                        else:
+                            waveform = torch.from_numpy(audio_file_or_array).float()
+                    else:
+                        # Flatten higher dimensions
+                        waveform = torch.from_numpy(audio_file_or_array.flatten()).unsqueeze(0).float()
+                else:
+                    # Fallback for other types
+                    waveform = torch.from_numpy(np.array(audio_file_or_array)).unsqueeze(0).float()
+                
+                # Ensure mono (single channel)
+                if waveform.shape[0] > 1:
                     waveform = waveform[0:1]
             
             # Move to device
