@@ -31,26 +31,52 @@ from utils.helpers import create_temp_directory, cleanup_temp_files, load_config
 # --- End Imports ---
 
 class SciFiColors:
-    BG_SPACE = "#0a0e1a"
-    BG_DARK = "#0f1419"
-    BG_CARD = "#151b26"
-    BG_ELEVATED = "#1a2332"
-    PRIMARY = "#00d9ff"
-    PRIMARY_DARK = "#0099cc"
-    ACCENT = "#ff2e63"
-    SUCCESS = "#00ff99"
-    SUCCESS_DARK = "#00cc77"
-    ERROR = "#ff2e63"
-    WARNING = "#ffd700"
-    INFO = "#3b82f6"
-    PERFORMANCE = "#9333ea"  # Purple for performance indicators
+    # Deep space backgrounds with blue undertones
+    BG_SPACE = "#030712"
+    BG_DARK = "#0a0f1a"
+    BG_CARD = "#0d1421"
+    BG_ELEVATED = "#111827"
+    BG_HOVER = "#1a2744"
+    
+    # Vibrant cyberpunk primary colors
+    PRIMARY = "#00f0ff"  # Neon cyan
+    PRIMARY_DARK = "#00b8cc"
+    PRIMARY_GLOW = "#00f0ff"
+    
+    # Electric accents
+    ACCENT = "#ff0055"  # Hot pink/magenta
+    ACCENT_SECONDARY = "#bf00ff"  # Electric purple
+    
+    # Status colors with glow effect
+    SUCCESS = "#00ff88"  # Neon green
+    SUCCESS_DARK = "#00cc66"
+    ERROR = "#ff0055"
+    WARNING = "#ffcc00"  # Electric yellow
+    INFO = "#00aaff"
+    
+    # Performance/special indicators
+    PERFORMANCE = "#a855f7"  # Purple
+    HOLOGRAM = "#00ffcc"  # Holographic cyan-green
+    ENERGY = "#ff6600"  # Energy orange
+    
+    # Text hierarchy
     TEXT_PRIMARY = "#f0f9ff"
-    TEXT_SECONDARY = "#b2c8d9"
-    TEXT_MUTED = "#6c7891"
-    BORDER = "#2e3a59"
-    BORDER_GLOW = "#00d9ff"
-    GRADIENT_START = "#00d9ff"
-    GRADIENT_END = "#9333ea"
+    TEXT_SECONDARY = "#94a3b8"
+    TEXT_MUTED = "#64748b"
+    TEXT_GLOW = "#00f0ff"
+    
+    # Borders and lines
+    BORDER = "#1e293b"
+    BORDER_GLOW = "#00f0ff"
+    BORDER_ACCENT = "#ff0055"
+    
+    # Gradients
+    GRADIENT_START = "#00f0ff"
+    GRADIENT_MID = "#a855f7"
+    GRADIENT_END = "#ff0055"
+    
+    # Scan line effect color
+    SCANLINE = "#00f0ff"
 
 logger = logging.getLogger("SecureXApp")
 logger.setLevel(logging.INFO)
@@ -771,84 +797,201 @@ class SecureXApp:
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         )
         
+        # Create animated hexagonal logo container
+        hex_logo = ft.Stack([
+            # Outer glow ring
+            ft.Container(
+                width=140,
+                height=140,
+                border=ft.border.all(2, ft.Colors.with_opacity(0.3, SciFiColors.PRIMARY)),
+                border_radius=70,
+                bgcolor=ft.Colors.with_opacity(0.05, SciFiColors.PRIMARY),
+                shadow=ft.BoxShadow(
+                    spread_radius=8,
+                    blur_radius=30,
+                    color=ft.Colors.with_opacity(0.4, SciFiColors.PRIMARY),
+                ),
+            ),
+            # Inner ring with accent
+            ft.Container(
+                width=120,
+                height=120,
+                border=ft.border.all(2, SciFiColors.PRIMARY),
+                border_radius=60,
+                bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.PRIMARY),
+                left=10,
+                top=10,
+            ),
+            # Innermost circle with icon
+            ft.Container(
+                content=ft.Icon(
+                    ft.Icons.FINGERPRINT_ROUNDED,
+                    color=SciFiColors.PRIMARY,
+                    size=50,
+                ),
+                width=100,
+                height=100,
+                border_radius=50,
+                bgcolor=ft.Colors.with_opacity(0.2, SciFiColors.PRIMARY),
+                alignment=ft.alignment.center,
+                left=20,
+                top=20,
+                shadow=ft.BoxShadow(
+                    blur_radius=20,
+                    color=ft.Colors.with_opacity(0.6, SciFiColors.PRIMARY),
+                ),
+            ),
+            # Corner accents
+            ft.Container(
+                width=20,
+                height=2,
+                bgcolor=SciFiColors.ACCENT,
+                left=0,
+                top=70,
+            ),
+            ft.Container(
+                width=20,
+                height=2,
+                bgcolor=SciFiColors.ACCENT,
+                right=0,
+                top=70,
+                left=120,
+            ),
+        ], width=140, height=140)
+        
         left_side = ft.Container(
             content=ft.Column(
                 [
                     ft.Container(expand=1),
-                    ft.Stack([
-                        ft.Container(
-                            width=100,
-                            height=100,
-                            border=ft.border.all(3, SciFiColors.PRIMARY),
-                            border_radius=20,
-                            bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.PRIMARY),
-                        ),
-                        ft.Container(
-                            content=ft.Icon(
-                                ft.Icons.SECURITY_ROUNDED,
-                                color=SciFiColors.PRIMARY,
-                                size=50,
-                            ),
-                            width=100,
-                            height=100,
-                            alignment=ft.alignment.center,
-                        ),
-                    ]),
-                    ft.Container(height=24),
-                    ft.Text(
-                        "SECUREX",
-                        size=48,
-                        weight=ft.FontWeight.BOLD,
-                        color=SciFiColors.TEXT_PRIMARY,
-                        font_family="Orbitron",
-                    ),
-                    ft.Text(
-                        "ASSIST",
-                        size=48,
-                        weight=ft.FontWeight.BOLD,
-                        color=SciFiColors.PRIMARY,
-                        font_family="Orbitron",
-                    ),
-                    ft.Container(height=16),
+                    hex_logo,
+                    ft.Container(height=30),
+                    # Main title with glow effect
                     ft.Container(
                         content=ft.Text(
-                            "VOICE BIOMETRIC AUTH",
-                            size=13,
-                            color=SciFiColors.TEXT_SECONDARY,
-                            weight=ft.FontWeight.W_600,
+                            "SECUREX",
+                            size=52,
+                            weight=ft.FontWeight.BOLD,
+                            color=SciFiColors.TEXT_PRIMARY,
+                            font_family="Orbitron",
                         ),
-                        padding=ft.padding.symmetric(horizontal=20, vertical=8),
-                        border=ft.border.all(1, SciFiColors.BORDER_GLOW),
-                        border_radius=4,
-                        bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.PRIMARY),
+                        shadow=ft.BoxShadow(
+                            blur_radius=30,
+                            color=ft.Colors.with_opacity(0.5, SciFiColors.PRIMARY),
+                        ),
                     ),
-                    ft.Container(height=32),
-                    ft.Row([
-                        ft.Icon(ft.Icons.SHIELD_ROUNDED, size=16, color=SciFiColors.SUCCESS),
-                        ft.Text(
-                            "Military-Grade Security",
-                            size=12,
-                            color=SciFiColors.TEXT_MUTED,
+                    ft.Container(
+                        content=ft.Text(
+                            "ASSIST",
+                            size=52,
+                            weight=ft.FontWeight.BOLD,
+                            color=SciFiColors.PRIMARY,
+                            font_family="Orbitron",
                         ),
-                    ], spacing=8),
-                    ft.Container(height=8),
-                    ft.Row([
-                        ft.Icon(ft.Icons.VERIFIED_USER_ROUNDED, size=16, color=SciFiColors.PRIMARY),
-                        ft.Text(
-                            "Multi-Factor Authentication",
-                            size=12,
-                            color=SciFiColors.TEXT_MUTED,
+                        shadow=ft.BoxShadow(
+                            blur_radius=40,
+                            color=ft.Colors.with_opacity(0.8, SciFiColors.PRIMARY),
                         ),
-                    ], spacing=8),
+                    ),
+                    ft.Container(height=20),
+                    # Tech badge with scan line effect
+                    ft.Container(
+                        content=ft.Row([
+                            ft.Container(
+                                width=8,
+                                height=8,
+                                border_radius=4,
+                                bgcolor=SciFiColors.SUCCESS,
+                                shadow=ft.BoxShadow(
+                                    blur_radius=8,
+                                    color=SciFiColors.SUCCESS,
+                                ),
+                            ),
+                            ft.Text(
+                                "NEURAL BIOMETRIC SYSTEM",
+                                size=11,
+                                color=SciFiColors.TEXT_SECONDARY,
+                                weight=ft.FontWeight.W_700,
+                                letter_spacing=2,
+                            ),
+                        ], spacing=10, alignment=ft.MainAxisAlignment.CENTER),
+                        padding=ft.padding.symmetric(horizontal=20, vertical=10),
+                        border=ft.border.all(1, SciFiColors.BORDER_GLOW),
+                        border_radius=2,
+                        bgcolor=ft.Colors.with_opacity(0.15, SciFiColors.PRIMARY),
+                    ),
+                    ft.Container(height=40),
+                    # Feature indicators with cyberpunk style
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Row([
+                                ft.Container(
+                                    content=ft.Icon(ft.Icons.SHIELD_ROUNDED, size=18, color=SciFiColors.SUCCESS),
+                                    width=32,
+                                    height=32,
+                                    border_radius=4,
+                                    bgcolor=ft.Colors.with_opacity(0.2, SciFiColors.SUCCESS),
+                                    alignment=ft.alignment.center,
+                                ),
+                                ft.Column([
+                                    ft.Text("MILITARY-GRADE", size=10, color=SciFiColors.SUCCESS, weight=ft.FontWeight.BOLD),
+                                    ft.Text("256-bit encryption", size=9, color=SciFiColors.TEXT_MUTED),
+                                ], spacing=0),
+                            ], spacing=12),
+                            ft.Container(height=10),
+                            ft.Row([
+                                ft.Container(
+                                    content=ft.Icon(ft.Icons.FACE_ROUNDED, size=18, color=SciFiColors.PRIMARY),
+                                    width=32,
+                                    height=32,
+                                    border_radius=4,
+                                    bgcolor=ft.Colors.with_opacity(0.2, SciFiColors.PRIMARY),
+                                    alignment=ft.alignment.center,
+                                ),
+                                ft.Column([
+                                    ft.Text("MULTI-MODAL AUTH", size=10, color=SciFiColors.PRIMARY, weight=ft.FontWeight.BOLD),
+                                    ft.Text("Voice + Face fusion", size=9, color=SciFiColors.TEXT_MUTED),
+                                ], spacing=0),
+                            ], spacing=12),
+                            ft.Container(height=10),
+                            ft.Row([
+                                ft.Container(
+                                    content=ft.Icon(ft.Icons.PSYCHOLOGY_ROUNDED, size=18, color=SciFiColors.ACCENT_SECONDARY),
+                                    width=32,
+                                    height=32,
+                                    border_radius=4,
+                                    bgcolor=ft.Colors.with_opacity(0.2, SciFiColors.ACCENT_SECONDARY),
+                                    alignment=ft.alignment.center,
+                                ),
+                                ft.Column([
+                                    ft.Text("AI-POWERED", size=10, color=SciFiColors.ACCENT_SECONDARY, weight=ft.FontWeight.BOLD),
+                                    ft.Text("Neural processing", size=9, color=SciFiColors.TEXT_MUTED),
+                                ], spacing=0),
+                            ], spacing=12),
+                        ], spacing=0),
+                        padding=20,
+                        border_radius=8,
+                        bgcolor=ft.Colors.with_opacity(0.3, SciFiColors.BG_DARK),
+                        border=ft.border.all(1, SciFiColors.BORDER),
+                    ),
                     ft.Container(expand=1),
+                    # Version tag
+                    ft.Text("v2.0.0 // QUANTUM EDITION", size=9, color=SciFiColors.TEXT_MUTED, letter_spacing=1),
+                    ft.Container(height=20),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 alignment=ft.MainAxisAlignment.CENTER,
             ),
-            width=420,
+            width=450,
             padding=40,
-            bgcolor=ft.Colors.with_opacity(0.3, SciFiColors.BG_CARD),
-            border=ft.border.only(right=ft.border.BorderSide(1, SciFiColors.BORDER_GLOW)),
+            gradient=ft.LinearGradient(
+                colors=[
+                    ft.Colors.with_opacity(0.6, SciFiColors.BG_CARD),
+                    ft.Colors.with_opacity(0.3, SciFiColors.BG_DARK),
+                ],
+                begin=ft.alignment.top_center,
+                end=ft.alignment.bottom_center,
+            ),
+            border=ft.border.only(right=ft.border.BorderSide(2, SciFiColors.BORDER_GLOW)),
         )
         
         right_side = ft.Container(
@@ -900,31 +1043,68 @@ class SecureXApp:
                 spacing=0,
                 alignment=ft.MainAxisAlignment.START,
             ),
-            width=920,
-            height=700,
-            bgcolor=ft.Colors.with_opacity(0.6, SciFiColors.BG_CARD),
-            border=ft.border.all(1, SciFiColors.BORDER_GLOW),
-            border_radius=16,
+            width=980,
+            height=720,
+            bgcolor=ft.Colors.with_opacity(0.85, SciFiColors.BG_CARD),
+            border=ft.border.all(2, SciFiColors.BORDER_GLOW),
+            border_radius=4,
             shadow=ft.BoxShadow(
-                spread_radius=0,
-                blur_radius=40,
-                color=ft.Colors.with_opacity(0.3, SciFiColors.PRIMARY),
+                spread_radius=2,
+                blur_radius=60,
+                color=ft.Colors.with_opacity(0.4, SciFiColors.PRIMARY),
             ),
-            clip_behavior=ft.ClipBehavior.HARD_EDGE, # Ensures content respects border radius
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
         )
         
+        # Cyberpunk grid background
+        grid_overlay = ft.Container(
+            expand=True,
+            bgcolor=ft.Colors.TRANSPARENT,
+        )
+        
+        # Animated glow corners
+        corner_tl = ft.Container(
+            width=100,
+            height=100,
+            gradient=ft.RadialGradient(
+                colors=[ft.Colors.with_opacity(0.3, SciFiColors.PRIMARY), ft.Colors.TRANSPARENT],
+                radius=1.0,
+            ),
+            left=0,
+            top=0,
+        )
+        
+        corner_br = ft.Container(
+            width=150,
+            height=150,
+            gradient=ft.RadialGradient(
+                colors=[ft.Colors.with_opacity(0.2, SciFiColors.ACCENT), ft.Colors.TRANSPARENT],
+                radius=1.0,
+            ),
+            right=0,
+            bottom=0,
+        )
+        
+        # Deep space gradient background
         bg_gradient = ft.Container(
             expand=True,
-            gradient=ft.LinearGradient(
-                colors=[SciFiColors.BG_SPACE, "#0a1628", SciFiColors.BG_SPACE],
-                begin=ft.alignment.top_left,
-                end=ft.alignment.bottom_right,
+            gradient=ft.RadialGradient(
+                colors=[
+                    "#0a1525",
+                    SciFiColors.BG_SPACE,
+                    "#020408",
+                ],
+                center=ft.alignment.center,
+                radius=1.5,
             ),
         )
         
         return ft.Container(
             content=ft.Stack([
                 bg_gradient,
+                corner_tl,
+                corner_br,
+                grid_overlay,
                 ft.Container(
                     content=main_card,
                     alignment=ft.alignment.center,
@@ -947,83 +1127,145 @@ class SecureXApp:
             is_selected = self.current_nav_section == item["name"]
             nav_buttons.append(
                 ft.Container(
-                    content=ft.ElevatedButton(
-                        content=ft.Row([
-                            ft.Icon(
+                    content=ft.Row([
+                        # Active indicator bar
+                        ft.Container(
+                            width=3,
+                            height=36,
+                            border_radius=2,
+                            bgcolor=SciFiColors.PRIMARY if is_selected else ft.Colors.TRANSPARENT,
+                            shadow=ft.BoxShadow(blur_radius=8, color=SciFiColors.PRIMARY) if is_selected else None,
+                        ),
+                        ft.Container(width=12),
+                        ft.Container(
+                            content=ft.Icon(
                                 item["icon"], 
                                 size=20, 
-                                color=SciFiColors.PRIMARY if is_selected else SciFiColors.TEXT_SECONDARY
+                                color=SciFiColors.PRIMARY if is_selected else SciFiColors.TEXT_MUTED
                             ),
-                            ft.Text(
-                                item["label"], 
-                                size=14, 
-                                weight=ft.FontWeight.W_600 if is_selected else ft.FontWeight.W_500,
-                                color=SciFiColors.TEXT_PRIMARY if is_selected else SciFiColors.TEXT_SECONDARY
-                            ),
-                        ], spacing=12),
-                        on_click=lambda e, name=item["name"]: self._navigate_to_section(name),
-                        width=200,
-                        height=48,
-                        style=ft.ButtonStyle(
-                            bgcolor=SciFiColors.BG_ELEVATED if is_selected else ft.Colors.TRANSPARENT,
-                            color=SciFiColors.TEXT_PRIMARY,
-                            shape=ft.RoundedRectangleBorder(radius=8),
-                            elevation=4 if is_selected else 0,
-                            shadow_color=SciFiColors.PRIMARY if is_selected else None,
-                            side=ft.BorderSide(
-                                width=1, 
-                                color=SciFiColors.BORDER_GLOW if is_selected else SciFiColors.BORDER
-                            )
+                            width=36,
+                            height=36,
+                            border_radius=6,
+                            bgcolor=ft.Colors.with_opacity(0.2, SciFiColors.PRIMARY) if is_selected else ft.Colors.TRANSPARENT,
+                            alignment=ft.alignment.center,
                         ),
-                    ),
-                    margin=ft.margin.symmetric(vertical=4, horizontal=10),
+                        ft.Container(width=10),
+                        ft.Text(
+                            item["label"].upper(), 
+                            size=12, 
+                            weight=ft.FontWeight.W_700 if is_selected else ft.FontWeight.W_500,
+                            color=SciFiColors.TEXT_PRIMARY if is_selected else SciFiColors.TEXT_MUTED,
+                            letter_spacing=1,
+                        ),
+                    ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    on_click=lambda e, name=item["name"]: self._navigate_to_section(name),
+                    height=50,
+                    border_radius=4,
+                    bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.PRIMARY) if is_selected else ft.Colors.TRANSPARENT,
+                    border=ft.border.all(1, SciFiColors.BORDER_GLOW if is_selected else ft.Colors.TRANSPARENT),
+                    margin=ft.margin.symmetric(vertical=3, horizontal=12),
+                    ink=True,
+                    on_hover=lambda e: self._on_nav_hover(e),
                 )
             )
         
+        # Enhanced cyberpunk sidebar with glow effects
+        sidebar_logo = ft.Container(
+            content=ft.Column([
+                ft.Stack([
+                    # Glow background
+                    ft.Container(
+                        width=50,
+                        height=50,
+                        border_radius=25,
+                        bgcolor=ft.Colors.with_opacity(0.2, SciFiColors.PRIMARY),
+                        shadow=ft.BoxShadow(
+                            blur_radius=20,
+                            color=ft.Colors.with_opacity(0.5, SciFiColors.PRIMARY),
+                        ),
+                    ),
+                    ft.Container(
+                        content=ft.Icon(ft.Icons.FINGERPRINT_ROUNDED, color=SciFiColors.PRIMARY, size=30),
+                        width=50,
+                        height=50,
+                        alignment=ft.alignment.center,
+                    ),
+                ], width=50, height=50),
+                ft.Container(height=10),
+                ft.Text("SECUREX", size=22, weight=ft.FontWeight.BOLD, color=SciFiColors.TEXT_PRIMARY, font_family="Orbitron"),
+                ft.Text("ASSIST", size=12, weight=ft.FontWeight.W_600, color=SciFiColors.PRIMARY, letter_spacing=4),
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=2),
+            padding=ft.padding.symmetric(vertical=25),
+            alignment=ft.alignment.center,
+        )
+        
+        # Sidebar divider with glow
+        sidebar_divider = ft.Container(
+            content=ft.Row([
+                ft.Container(expand=True, height=1, bgcolor=SciFiColors.BORDER),
+                ft.Container(
+                    width=8,
+                    height=8,
+                    border_radius=4,
+                    bgcolor=SciFiColors.PRIMARY,
+                    shadow=ft.BoxShadow(blur_radius=8, color=SciFiColors.PRIMARY),
+                ),
+                ft.Container(expand=True, height=1, bgcolor=SciFiColors.BORDER),
+            ], spacing=0),
+            padding=ft.padding.symmetric(horizontal=20),
+        )
+        
         sidebar = ft.Container(
             content=ft.Column([
+                sidebar_logo,
+                sidebar_divider,
+                ft.Container(height=10),
                 ft.Container(
-                    content=ft.Row(
-                        [
-                            ft.Icon(ft.Icons.SECURITY_ROUNDED, color=SciFiColors.PRIMARY, size=32),
-                            ft.Text("SECUREX", size=24, weight=ft.FontWeight.BOLD, color=SciFiColors.TEXT_PRIMARY, font_family="Orbitron"),
-                        ], 
-                        spacing=12, 
-                        alignment=ft.MainAxisAlignment.CENTER
-                    ),
-                    padding=ft.padding.all(20),
-                    height=100,
-                    alignment=ft.alignment.center,
-                ),
-                ft.Divider(color=SciFiColors.BORDER, height=1),
-                ft.Container(
-                    content=ft.Column(nav_buttons, spacing=5),
-                    padding=ft.padding.symmetric(vertical=20),
+                    content=ft.Column(nav_buttons, spacing=6),
+                    padding=ft.padding.symmetric(vertical=10),
                 ),
                 ft.Container(expand=True),
-                ft.Divider(color=SciFiColors.BORDER, height=1),
+                # System status indicator
+                ft.Container(
+                    content=ft.Row([
+                        ft.Container(
+                            width=8,
+                            height=8,
+                            border_radius=4,
+                            bgcolor=SciFiColors.SUCCESS,
+                            shadow=ft.BoxShadow(blur_radius=6, color=SciFiColors.SUCCESS),
+                        ),
+                        ft.Text("SYSTEM ONLINE", size=9, color=SciFiColors.SUCCESS, weight=ft.FontWeight.W_600, letter_spacing=1),
+                    ], spacing=8, alignment=ft.MainAxisAlignment.CENTER),
+                    padding=ft.padding.symmetric(vertical=10),
+                ),
+                sidebar_divider,
                 ft.Container(
                     content=ft.ElevatedButton(
                         content=ft.Row([
-                            ft.Icon(ft.Icons.LOGOUT_ROUNDED, size=20, color=SciFiColors.ERROR),
-                            ft.Text("Logout", size=14, weight=ft.FontWeight.W_600),
-                        ], spacing=12, alignment=ft.MainAxisAlignment.START),
+                            ft.Icon(ft.Icons.POWER_SETTINGS_NEW_ROUNDED, size=18, color=SciFiColors.ERROR),
+                            ft.Text("DISCONNECT", size=12, weight=ft.FontWeight.W_700, letter_spacing=1),
+                        ], spacing=10, alignment=ft.MainAxisAlignment.CENTER),
                         on_click=lambda _: self.logout(),
                         width=200,
-                        height=48,
+                        height=44,
                         style=ft.ButtonStyle(
-                            bgcolor=ft.Colors.with_opacity(0.1, SciFiColors.ERROR),
+                            bgcolor=ft.Colors.with_opacity(0.15, SciFiColors.ERROR),
                             color=SciFiColors.ERROR,
-                            shape=ft.RoundedRectangleBorder(radius=8),
-                            side=ft.BorderSide(width=1, color=SciFiColors.ERROR)
+                            shape=ft.RoundedRectangleBorder(radius=4),
+                            side=ft.BorderSide(width=1, color=ft.Colors.with_opacity(0.5, SciFiColors.ERROR))
                         ),
                     ),
-                    margin=ft.margin.symmetric(vertical=20, horizontal=10),
+                    margin=ft.margin.symmetric(vertical=20, horizontal=15),
                 ),
             ], spacing=0),
-            width=240,
-            bgcolor=SciFiColors.BG_DARK,
-            border=ft.border.only(right=ft.border.BorderSide(1, SciFiColors.BORDER)),
+            width=260,
+            gradient=ft.LinearGradient(
+                colors=[SciFiColors.BG_DARK, ft.Colors.with_opacity(0.95, SciFiColors.BG_CARD)],
+                begin=ft.alignment.top_center,
+                end=ft.alignment.bottom_center,
+            ),
+            border=ft.border.only(right=ft.border.BorderSide(2, SciFiColors.BORDER_GLOW)),
         )
         
         content_area = ft.Container(
@@ -1051,6 +1293,21 @@ class SecureXApp:
             ]),
             expand=True,
         )
+
+    def _on_nav_hover(self, e):
+        """Handle navigation item hover effect"""
+        if e.data == "true":
+            e.control.bgcolor = ft.Colors.with_opacity(0.08, SciFiColors.PRIMARY)
+        else:
+            # Check if this is the selected item
+            is_selected = False
+            for item in e.control.content.controls:
+                if hasattr(item, 'bgcolor') and item.bgcolor and SciFiColors.PRIMARY in str(item.bgcolor):
+                    is_selected = True
+                    break
+            if not is_selected:
+                e.control.bgcolor = ft.Colors.TRANSPARENT
+        e.control.update()
 
     def _handle_auth_tab_change(self, e):
         """Handle tab switching"""
