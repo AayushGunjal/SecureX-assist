@@ -13,22 +13,50 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 
 
-def load_config(config_path: str = "config.yaml") -> Dict[str, Any]:
+def load_config(config_path: str = None) -> Dict[str, Any]:
     """
-    Load configuration from YAML file
+    Load configuration from YAML file with profile support
     
     Args:
-        config_path: Path to config.yaml
+        config_path: Path to config file (optional)
         
     Returns:
         Configuration dictionary
     """
     try:
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
+        # Determine which config to load based on environment
+        if config_path is None:
+            env_profile = os.getenv('SECUREX_ENV', 'development').lower()
+            
+            if env_profile == 'production':
+                config_path = "config_production.yaml"
+            elif env_profile == 'development':
+                config_path = "config_development.yaml"
+            else:
+                config_path = "config.yaml"  # Fallback to original
+            
+            logger.info(f"Environment profile: {env_profile}")
         
-        logger.info(f"Configuration loaded from {config_path}")
-        return config
+        # Load the configuration file
+        if Path(config_path).exists():
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+            
+            logger.info(f"[OK] Configuration loaded from {config_path}")
+            
+            # Log security mode for transparency
+            dev_mode = config.get('system', {}).get('development_mode', False)
+            bypass = config.get('system', {}).get('bypass_anti_spoofing', False)
+            
+            if dev_mode or bypass:
+                logger.warning("[WARNING] DEVELOPMENT MODE - Security bypasses enabled")
+            else:
+                logger.info("[SECURE] PRODUCTION MODE - Full security enabled")
+            
+            return config
+        else:
+            logger.warning(f"Config file {config_path} not found, using default")
+            return get_default_config()
         
     except Exception as e:
         logger.error(f"Failed to load config: {e}")
@@ -121,14 +149,34 @@ def setup_logging(log_level: str = "INFO", log_file: str = "securex.log"):
     # Configure logging
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
     
+    # Create handlers with UTF-8 encoding
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    
+    # Console handler with UTF-8 encoding for Windows
+    import sys
+    stream_handler = logging.StreamHandler(sys.stdout)
+    if sys.platform == 'win32':
+        # Try to set console to UTF-8 mode
+        try:
+            import codecs
+            sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
+        except:
+            pass
+    
+    # Set formatter for both handlers
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    stream_handler.setFormatter(formatter)
+    
     logging.basicConfig(
         level=numeric_level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
-        ]
+        handlers=[file_handler, stream_handler]
     )
+
+    # Keep third-party internals quiet so real app issues are visible.
+    logging.getLogger("numba").setLevel(logging.WARNING)
+    logging.getLogger("numba.core").setLevel(logging.WARNING)
+    logging.getLogger("flet").setLevel(logging.INFO)
     
     logger.info(f"Logging initialized: level={log_level}, file={log_file}")
 

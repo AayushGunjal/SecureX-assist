@@ -8,9 +8,13 @@ import torch
 from typing import Optional, List, Dict, Tuple
 import logging
 from pathlib import Path
+import os
+import tempfile
 from core.voice_engine import VoiceEngine
 from core.anti_spoofing_aasist import AAISTAntiSpoofingEngine as AASISTAntiSpoofing
+from core.anti_spoofing import AntiSpoofingEngine
 from core.audio_preprocessor_advanced import AudioAugmentationEngine, VoiceQualityAnalyzer
+from scipy.io import wavfile
 import random
 import string
 
@@ -42,21 +46,71 @@ class UltimateVoiceBiometricEngine:
         force_fallback = config.get('security', {}).get('force_anti_spoof_fallback', False) or \
                          config.get('system', {}).get('fast_mode', False)
         self.anti_spoofing = AASISTAntiSpoofing(device, force_fallback=force_fallback)
+        self.secondary_anti_spoofing = AntiSpoofingEngine(config)
 
-        # Configuration parameters
-        self.base_threshold = config.get('security', {}).get('base_voice_threshold', 0.40)
-        self.spoof_min_confidence = config.get('security', {}).get('spoof_confidence_min', 0.85)
-        self.spoof_min_confidence_verify = config.get('security', {}).get('spoof_confidence_min_verify', 0.30)  # Lower threshold for verification
-        self.adaptive_threshold_enabled = config.get('security', {}).get('adaptive_threshold', True)
-        self.learning_enabled = config.get('security', {}).get('voice_update_learning', True)
-        self.min_match_samples = config.get('security', {}).get('min_match_samples', 2)
+        # Configuration parameters (support both legacy system.* and newer security.* paths)
+        security_cfg = config.get('security', {})
+        system_cfg = config.get('system', {})
+
+        self.base_threshold = security_cfg.get('base_voice_threshold', system_cfg.get('base_voice_threshold', 0.40))
+        self.spoof_min_confidence = security_cfg.get('spoof_confidence_min', system_cfg.get('spoof_confidence_min', 0.85))
+        self.spoof_min_confidence_verify = security_cfg.get(
+            'spoof_confidence_min_verify', system_cfg.get('spoof_confidence_min_verify', 0.55)
+        )
+        self.anti_spoof_fail_open = bool(
+            security_cfg.get('anti_spoof_fail_open', system_cfg.get('anti_spoof_fail_open', False))
+        )
+        self.adaptive_threshold_enabled = security_cfg.get('adaptive_threshold', system_cfg.get('adaptive_threshold', True))
+        self.learning_enabled = security_cfg.get('voice_update_learning', system_cfg.get('voice_update_learning', True))
+        self.min_match_samples = security_cfg.get('min_match_samples', system_cfg.get('min_match_samples', 2))
+
+        # Primary/secondary verification gates for speaker acceptance
+        biometric_cfg = config.get('biometric', {})
+        self.cosine_verify_threshold = float(
+            biometric_cfg.get(
+                'cosine_verify_threshold',
+                security_cfg.get('cosine_verify_threshold', system_cfg.get('cosine_verify_threshold', 0.58))
+            )
+        )
+        self.allow_borderline_voice_match = bool(
+            security_cfg.get('allow_borderline_voice_match', system_cfg.get('allow_borderline_voice_match', False))
+        )
+        self.borderline_min_cosine = float(
+            security_cfg.get('borderline_min_cosine', system_cfg.get('borderline_min_cosine', 0.50))
+        )
+        self.borderline_min_confidence = float(
+            security_cfg.get('borderline_min_confidence', system_cfg.get('borderline_min_confidence', 0.70))
+        )
+        self.borderline_min_quality = float(
+            security_cfg.get('borderline_min_quality', system_cfg.get('borderline_min_quality', 0.70))
+        )
+        self.calibrated_spoof_recheck_enabled = bool(
+            security_cfg.get('calibrated_spoof_recheck_enabled', system_cfg.get('calibrated_spoof_recheck_enabled', True))
+        )
+        self.calibrated_spoof_primary_confidence_max = float(
+            security_cfg.get('calibrated_spoof_primary_confidence_max', system_cfg.get('calibrated_spoof_primary_confidence_max', 0.15))
+        )
+        self.calibrated_spoof_secondary_confidence_min = float(
+            security_cfg.get('calibrated_spoof_secondary_confidence_min', system_cfg.get('calibrated_spoof_secondary_confidence_min', 0.50))
+        )
+        # In secondary engine, replay_detection is a "genuine-liveness" score (higher is better).
+        self.calibrated_spoof_min_replay_genuine = float(
+            security_cfg.get('calibrated_spoof_min_replay_genuine', system_cfg.get('calibrated_spoof_min_replay_genuine', 0.20))
+        )
+        self.calibrated_spoof_min_quality_score = float(
+            security_cfg.get('calibrated_spoof_min_quality_score', system_cfg.get('calibrated_spoof_min_quality_score', 0.55))
+        )
 
         # Initialize models
         self.voice_engine.load_models()
 
         # Performance settings
-        self.spoof_timeout = float(config.get('security', {}).get('anti_spoof_timeout_seconds', 2.0))
-        self.spoof_max_seconds = int(config.get('security', {}).get('anti_spoof_max_audio_seconds', 2))
+        self.spoof_timeout = float(
+            security_cfg.get('anti_spoof_timeout_seconds', system_cfg.get('anti_spoof_timeout_seconds', 3.5))
+        )
+        self.spoof_max_seconds = int(
+            security_cfg.get('anti_spoof_max_audio_seconds', system_cfg.get('anti_spoof_max_audio_seconds', 2))
+        )
 
         logger.info("UltimateVoiceBiometricEngine initialized with AASIST anti-spoofing and adaptive features")
 
@@ -139,6 +193,15 @@ class UltimateVoiceBiometricEngine:
                 embeddings_array = np.array(embeddings)
                 mean_embedding = np.mean(embeddings_array, axis=0)
                 variance_embedding = np.var(embeddings_array, axis=0)
+            
+            # CRITICAL: Normalize the mean embedding (mean of normalized vectors is NOT normalized!)
+            mean_norm = np.linalg.norm(mean_embedding)
+            if mean_norm > 0:
+                mean_embedding = mean_embedding / mean_norm
+                logger.info(f"Mean embedding normalized: norm={np.linalg.norm(mean_embedding):.6f}")
+            else:
+                logger.error("Mean embedding has zero norm!")
+                return False
 
             # Step 5: Store in database
             logger.info(f"Storing {len(embeddings)} embeddings for user {user_id}")
@@ -232,10 +295,15 @@ class UltimateVoiceBiometricEngine:
                     t.start()
                     t.join(timeout=self.spoof_timeout)
                     if t.is_alive():
-                        logger.warning(f"Anti-spoofing analysis timed out after {self.spoof_timeout} seconds - assuming genuine for speed")
-                        spoof_detected = False  # Assume genuine on timeout for faster UX
-                        confidence = 0.5
-                        details = {'error': 'timeout', 'assumed_genuine': True}
+                        logger.warning(f"Anti-spoofing analysis timed out after {self.spoof_timeout} seconds")
+                        if self.anti_spoof_fail_open:
+                            spoof_detected = False
+                            confidence = 0.5
+                            details = {'error': 'timeout', 'assumed_genuine': True}
+                        else:
+                            spoof_detected = True
+                            confidence = 0.0
+                            details = {'error': 'timeout', 'fail_closed': True}
                         t.join(0.1)
                     else:
                         is_genuine = result_container.get('is_genuine', False)
@@ -244,14 +312,59 @@ class UltimateVoiceBiometricEngine:
                         spoof_detected = not is_genuine
                     logger.info(f"Anti-spoofing finished in {time.time()-spoofing_start:.2f}s, confidence={confidence}")
                 except Exception as e:
-                    logger.warning(f"Anti-spoofing error: {e} - assuming genuine for speed")
-                    spoof_detected = False  # Assume genuine on error for faster UX
-                    confidence = 0.5
-                    details = {'error': str(e), 'assumed_genuine': True}
+                    logger.warning(f"Anti-spoofing error: {e}")
+                    if self.anti_spoof_fail_open:
+                        spoof_detected = False
+                        confidence = 0.5
+                        details = {'error': str(e), 'assumed_genuine': True}
+                    else:
+                        spoof_detected = True
+                        confidence = 0.0
+                        details = {'error': str(e), 'fail_closed': True}
             result['spoof_detected'] = spoof_detected
             result['details']['spoof_confidence'] = confidence
 
-            if confidence < self.spoof_min_confidence_verify:  # Use verification threshold (lower)
+            # Calibration pass to reduce false-positive spoof rejects from primary model.
+            if (
+                self.calibrated_spoof_recheck_enabled
+                and spoof_detected
+                and confidence <= self.calibrated_spoof_primary_confidence_max
+            ):
+                secondary = self._secondary_anti_spoof_check(audio_data_trimmed)
+                sec_conf = float(secondary.get('confidence', 0.0))
+                sec_details = secondary.get('details', {}) if isinstance(secondary, dict) else {}
+                sec_replay = float(sec_details.get('replay_detection', 1.0))
+                sec_quality = float(sec_details.get('quality_assessment', 0.0))
+
+                if (
+                    sec_conf >= self.calibrated_spoof_secondary_confidence_min
+                    and sec_replay >= self.calibrated_spoof_min_replay_genuine
+                    and sec_quality >= self.calibrated_spoof_min_quality_score
+                ):
+                    logger.warning(
+                        "Calibrated anti-spoof override: primary false-positive likely "
+                        "(primary_conf=%.3f, secondary_conf=%.3f, replay=%.3f, quality=%.3f)",
+                        confidence, sec_conf, sec_replay, sec_quality
+                    )
+                    spoof_detected = False
+                    confidence = max(confidence, sec_conf)
+                    result['spoof_detected'] = False
+                    result['details']['spoof_confidence'] = confidence
+                    result['details']['calibrated_spoof_override'] = True
+                    result['details']['secondary_anti_spoof'] = {
+                        'confidence': sec_conf,
+                        'replay_detection': sec_replay,
+                        'quality_assessment': sec_quality,
+                    }
+
+            calibrated_override = bool(result.get('details', {}).get('calibrated_spoof_override', False))
+
+            if spoof_detected:
+                result['details']['failure_reason'] = "Replay/spoof suspected by anti-spoofing"
+                logger.info(f"Anti-spoofing flagged spoof, returning after {time.time()-start_time:.2f}s")
+                return result
+
+            if (not calibrated_override) and confidence < self.spoof_min_confidence_verify:
                 result['details']['failure_reason'] = f"Anti-spoofing failed: {confidence:.3f} < {self.spoof_min_confidence_verify}"
                 logger.info(f"Anti-spoofing failed, returning after {time.time()-start_time:.2f}s")
                 return result
@@ -338,18 +451,38 @@ class UltimateVoiceBiometricEngine:
                     return result
 
             # Step 9: Final decision - Use cosine similarity as primary metric
-            # Verification passes if cosine similarity is above threshold (more reliable than combined score)
-            cosine_threshold = 0.5  # 50% similarity threshold
-            result['verified'] = cosine_sim >= cosine_threshold
+            # Add configurable borderline acceptance to reduce false rejects for legitimate users.
+            cosine_threshold = self.cosine_verify_threshold
+            allow_borderline = self.allow_borderline_voice_match
+            borderline_min_cosine = self.borderline_min_cosine
+            borderline_min_confidence = self.borderline_min_confidence
+            borderline_min_quality = self.borderline_min_quality
+
+            borderline_pass = (
+                allow_borderline
+                and (not result.get('spoof_detected', False))
+                and result.get('quality_score', 0.0) >= borderline_min_quality
+                and cosine_sim >= borderline_min_cosine
+                and confidence >= borderline_min_confidence
+            )
+
+            result['verified'] = (cosine_sim >= cosine_threshold) or borderline_pass
+            if borderline_pass and cosine_sim < cosine_threshold:
+                result['details']['borderline_match'] = True
+                result['details']['decision_path'] = 'borderline_voice_match'
 
             # Step 10: Adjust confidence based on verification result
             # Use a combination of cosine similarity and the combined score for final confidence
             if result['verified']:
                 # For verified matches, confidence reflects how much better than threshold
-                excess_similarity = cosine_sim - cosine_threshold
-                cosine_confidence = min(1.0, 0.5 + excess_similarity * 2.0)  # Scale to 50-100%
-                # Blend with combined score confidence (weighted average)
-                result['confidence'] = (cosine_confidence * 0.7 + confidence * 0.3)
+                if result.get('details', {}).get('borderline_match', False):
+                    # Keep confidence meaningful for accepted borderline matches.
+                    result['confidence'] = max(confidence, borderline_min_confidence)
+                else:
+                    excess_similarity = cosine_sim - cosine_threshold
+                    cosine_confidence = min(1.0, 0.5 + excess_similarity * 2.0)  # Scale to 50-100%
+                    # Blend with combined score confidence (weighted average)
+                    result['confidence'] = (cosine_confidence * 0.7 + confidence * 0.3)
             else:
                 # For failed matches, confidence reflects how close to threshold
                 cosine_confidence = max(0.0, cosine_sim * 2.0)  # Scale to 0-100%
@@ -358,8 +491,16 @@ class UltimateVoiceBiometricEngine:
 
             logger.info(f"Final decision - verified: {result['verified']}, confidence: {result['confidence']:.4f}, cosine_sim: {cosine_sim:.4f}")
 
-            # Step 11: Adaptive learning (if verification successful)
-            if result['verified'] and self.learning_enabled:
+            # Step 11: Adaptive learning (only for strong, clean matches to avoid profile drift)
+            strong_verified_match = (
+                result['verified']
+                and (not result.get('details', {}).get('borderline_match', False))
+                and cosine_sim >= (cosine_threshold + 0.05)
+                and result.get('quality_score', 0.0) >= 0.80
+                and (not result.get('spoof_detected', False))
+            )
+
+            if strong_verified_match and self.learning_enabled:
                 try:
                     self.db.update_voice_embedding(user_id, live_embedding, learning_rate=0.1)
                     logger.info(f"Voice embedding updated for user {user_id} with adaptive learning")
@@ -417,6 +558,31 @@ class UltimateVoiceBiometricEngine:
         except Exception as e:
             logger.warning(f"Failed to prepare audio for spoofing, using original: {e}")
             return audio_data
+
+    def _secondary_anti_spoof_check(self, audio_data: np.ndarray) -> Dict:
+        """Run secondary anti-spoofing analysis for calibration of ambiguous primary results."""
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp:
+                temp_path = tmp.name
+
+            wav_data = np.asarray(audio_data)
+            if wav_data.dtype != np.int16:
+                max_abs = float(np.max(np.abs(wav_data))) if wav_data.size > 0 else 1.0
+                scale = 32767.0 / max(1.0, max_abs)
+                wav_data = (wav_data * scale).astype(np.int16)
+
+            wavfile.write(temp_path, 16000, wav_data)
+            return self.secondary_anti_spoofing.analyze_audio_security(temp_path)
+        except Exception as e:
+            logger.warning(f"Secondary anti-spoof check failed: {e}")
+            return {'confidence': 0.0, 'details': {'error': str(e)}}
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
 
     def _compute_cosine_similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
         """Compute cosine similarity between two embeddings"""

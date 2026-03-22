@@ -6,7 +6,6 @@ Robust, stoppable AudioRecorder using sounddevice InputStream callback with
 detailed debug logging and a safe fallback. Also includes a simple
 VoiceActivityDetector and AudioProcessor helpers.
 
-Replace the existing core/audio_processor.py with this file.
 Dependencies:
   - numpy
   - sounddevice
@@ -79,9 +78,9 @@ class AudioRecorder:
     # --- START: ADD record_with_vad METHOD ---
     def record_with_vad(self,
                           vad_detector,
-                          min_speech_duration_ms: int = 250,
-                          max_silence_duration_ms: int = 1000,
-                          padding_duration_ms: int = 200,
+                          min_speech_duration_ms: int = 250,  # Optimized: Keep responsive
+                          max_silence_duration_ms: int = 800,  # Optimized: Faster stop (was 1000)
+                          padding_duration_ms: int = 150,      # Optimized: Less padding (was 200)
                           device: Optional[int] = None) -> Optional[np.ndarray]:
         """
         Records from the microphone until speech stops, using VAD.
@@ -187,9 +186,9 @@ class AudioRecorder:
             padding_start = np.zeros(min(padding_samples, audio_np.size), dtype=self.dtype)
             audio_np = np.concatenate([padding_start, audio_np], axis=0)
 
-            # --- START FIX: Use AGC instead of Normalize ---
-            logger.debug("Applying AGC to VAD audio...")
-            audio_np = AudioProcessor.apply_automatic_gain_control(audio_np)
+            # --- START FIX: Bypassing all processing per user request ---
+            logger.debug("Bypassing audio processing. Using raw VAD audio.")
+            # audio_np = AudioProcessor.normalize(audio_np)
             # --- END FIX ---
             
             logger.info("VAD Recording complete: samples=%d duration=%.2fs", audio_np.shape[0], audio_np.shape[0] / self.sample_rate)
@@ -231,14 +230,6 @@ class AudioRecorder:
                            device: Optional[int] = None) -> Optional[np.ndarray]:
         """
         Record audio for up to `duration` seconds. Returns earlier if stop_recording() is called.
-
-        Args:
-            duration: max duration in seconds
-            progress_callback: optional callable(progress: float 0..1) called periodically
-            device: optional device id/string (overrides config device)
-
-        Returns:
-            1-D numpy float32 array in range approximately [-1.0, 1.0], or None if nothing captured.
         """
         logger.info("record_audio called: duration=%s device=%s", duration, device or self.device)
         self._stop_event.clear()
@@ -299,10 +290,11 @@ class AudioRecorder:
         if audio_np.dtype != np.float32:
             audio_np = audio_np.astype(np.float32)
 
-        # --- START FIX: Use AGC instead of Normalize ---
-        if audio_np.size:
-            logger.debug("Applying AGC to recorded audio for transcription...")
-            audio_np = AudioProcessor.apply_automatic_gain_control(audio_np)
+        # --- START FIX: Bypassing all processing per user request ---
+        logger.debug("Bypassing audio processing. Using raw audio.")
+        # if audio_np.size:
+        #    logger.debug("Applying AGC to recorded audio for transcription...")
+        #    audio_np = AudioProcessor.apply_automatic_gain_control(audio_np)
         # --- END FIX ---
 
         logger.info("Recording complete: samples=%d duration%.2fs", audio_np.shape[0], audio_np.shape[0] / self.sample_rate)
@@ -325,7 +317,6 @@ class AudioRecorder:
     def save_audio(self, audio: np.ndarray, path: str) -> bool:
         """
         Save float32 audio array to file using soundfile (PCM16).
-        Returns True on success.
         """
         try:
             import soundfile as sf  # optional dependency
@@ -341,18 +332,14 @@ class AudioRecorder:
 
 class VoiceActivityDetector:
     """
-    Lightweight RMS VAD (fast) with optional Silero VAD fallback (lazy-load).
+    Lightweight RMS VAD (fast).
     """
-
     def __init__(self, config: dict = None):
         cfg = config or {}
         audio_cfg = cfg.get("audio", {}) if cfg else {}
         self.sample_rate = int(audio_cfg.get("sample_rate", 16000))
         self.rms_threshold = float(audio_cfg.get("vad_threshold", 0.001))
         self.min_speech_duration = float(audio_cfg.get("min_speech_duration", 0.3))
-
-        self.silero_model = None
-        self.get_speech_timestamps = None
 
         logger.info("VoiceActivityDetector initialized (rms_threshold=%s)", self.rms_threshold)
 
@@ -364,37 +351,7 @@ class VoiceActivityDetector:
         # logger.debug("RMS VAD: rms=%.6f threshold=%.6f -> %s", rms, self.rms_threshold, has_voice)
         return has_voice, rms
 
-    def load_silero(self) -> bool:
-        if self.silero_model is not None:
-            return True
-        try:
-            import torch
-            self.silero_model, utils = torch.hub.load(
-                repo_or_dir="snakers4/silero-vad",
-                model="silero_vad",
-                force_reload=False
-            )
-            self.get_speech_timestamps = utils[0]
-            logger.info("Silero VAD loaded")
-            return True
-        except Exception as e:
-            logger.warning("Failed to load Silero VAD: %s", e)
-            return False
-
-    def detect_speech_silero(self, audio: np.ndarray) -> Tuple[bool, list]:
-        if not self.load_silero():
-            return self.detect_rms(audio)[0], []
-        try:
-            import torch
-            audio_tensor = torch.from_numpy(audio.flatten()).float()
-            timestamps = self.get_speech_timestamps(audio_tensor, self.silero_model, sampling_rate=self.sample_rate)
-            has = len(timestamps) > 0
-            logger.debug("Silero VAD detected %d segments", len(timestamps))
-            return has, timestamps
-        except Exception as e:
-            logger.exception("Silero VAD failed: %s", e)
-            return self.detect_rms(audio)[0], []
-
+    # Removed Silero VAD functions for simplicity as it wasn't being used by record_with_vad
 
 class AudioProcessor:
     """
@@ -403,6 +360,7 @@ class AudioProcessor:
 
     @staticmethod
     def apply_automatic_gain_control(audio: np.ndarray, target_level: float = 0.15) -> np.ndarray:
+        """Applies AGC. NOTE: This is currently BYPASSED in record_audio."""
         if audio.size == 0:
             return audio
         rms = float(np.sqrt(np.mean(audio ** 2)))
@@ -416,15 +374,12 @@ class AudioProcessor:
         # Soft clipping with tanh to prevent harsh clipping
         adjusted = np.tanh(adjusted).astype(np.float32) 
         
-        # --- START FIX: Normalize *after* AGC to get full dynamic range ---
-        adjusted = AudioProcessor.normalize(adjusted)
-        # --- END FIX ---
-        
         logger.debug("AGC applied: gain=%.3f", gain)
         return adjusted
 
     @staticmethod
     def normalize(audio: np.ndarray) -> np.ndarray:
+        """Applies peak normalization."""
         if audio.size == 0:
             return audio
         peak = float(np.max(np.abs(audio)))
@@ -461,4 +416,3 @@ class AudioProcessor:
         except Exception as e:
             logger.warning("Bandpass filter failed (scipy missing?): %s", e)
             return audio
-

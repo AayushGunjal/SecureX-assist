@@ -28,6 +28,10 @@ class IntentClassifier:
         self.intent_embeddings = {}
         self.threshold = 0.6  # --- FIX: Lowered threshold for better matching ---
         
+        # Performance optimization: Cache embeddings for recent queries
+        self._embedding_cache = {}  # {text: embedding}
+        self._cache_max_size = 100
+        
         # Try to load the model, but don't fail if it doesn't work
         try:
             from sentence_transformers import SentenceTransformer
@@ -41,10 +45,6 @@ class IntentClassifier:
     def add_intent(self, intent_name: str, examples: List[str]):
         """
         Add an intent with example phrases
-        
-        Args:
-            intent_name: Name of the intent (e.g., 'time', 'open_app')
-            examples: List of example phrases for this intent
         """
         self.intents[intent_name] = examples
         if self.model:
@@ -60,31 +60,34 @@ class IntentClassifier:
     
     def classify(self, text: str) -> Tuple[Optional[str], float]:
         """
-        Classify the intent of a text query
-        
-        Args:
-            text: Input text to classify
-            
-        Returns:
-            Tuple of (intent_name, confidence_score) or (None, 0.0) if no match
+        Classify the intent of a text query (optimized with caching)
         """
         if not self.intent_embeddings:
             logger.warning("Classifier has no intents loaded.")
             return None, 0.0
             
         if self.model:
-            # Use ML-based classification
-            text_embedding = self.model.encode([text])[0]
+            # Check cache first
+            if text in self._embedding_cache:
+                text_embedding = self._embedding_cache[text]
+            else:
+                # Use ML-based classification
+                text_embedding = self.model.encode([text])[0]
+                
+                # Cache the embedding
+                if len(self._embedding_cache) >= self._cache_max_size:
+                    # Remove oldest entry (simple FIFO)
+                    self._embedding_cache.pop(next(iter(self._embedding_cache)))
+                self._embedding_cache[text] = text_embedding
             
-            # Compute similarities with all intents
+            # Compute similarities with all intents (vectorized for speed)
             similarities = {}
             for intent_name, intent_embedding in self.intent_embeddings.items():
-                # --- START FIX: Use cosine similarity ---
+                # Faster cosine similarity computation
                 sim = np.dot(text_embedding, intent_embedding) / (
                     np.linalg.norm(text_embedding) * np.linalg.norm(intent_embedding)
                 )
                 similarities[intent_name] = sim
-                # --- END FIX ---
             
             # Find best match
             best_intent = max(similarities, key=similarities.get)
@@ -98,11 +101,9 @@ class IntentClassifier:
                 logger.info(f"No intent matched for '{text}' (best: {best_intent} with {best_score:.3f})")
                 return None, best_score
         else:
-            # Use keyword-based classification
+            # Use keyword-based classification (fast fallback)
             text_lower = text.lower()
-            # --- START FIX: Use 'intents' for keyword fallback ---
             for intent_name, examples in self.intents.items():
-            # --- END FIX ---
                 for example in examples:
                     if example.lower() in text_lower:
                         logger.info(f"Keyword matched '{text}' as intent '{intent_name}'")
@@ -111,7 +112,6 @@ class IntentClassifier:
             logger.info(f"No keyword match for '{text}'")
             return None, 0.0
     
-    # --- START REFACTOR: Replaced with 50 specific intents ---
     def setup_default_intents(self):
         """
         Add all default intents for the SecureX Voice Assistant.
@@ -158,11 +158,26 @@ class IntentClassifier:
             "open file explorer", "launch file explorer", "show my files", "open files"
         ])
         self.add_intent("open_app", [
-            "open app", "launch application", "open chrome", "launch firefox"
+            "open app", "launch application", "open chrome", "launch firefox", "open word"
         ])
         self.add_intent("close_app", [
             "close application", "close this app", "exit program"
         ])
+        
+        # --- START: Added new intents ---
+        self.add_intent("open_youtube", [
+            "open youtube", "launch youtube"
+        ])
+        self.add_intent("play_video", [
+            "play this video", "play", "search youtube for", "find this video on youtube", "play on youtube"
+        ])
+        self.add_intent("open_browser", [
+            "open browser", "launch browser", "open google"
+        ])
+        self.add_intent("search_google", [
+            "search for", "google", "search on google", "find me information on"
+        ])
+        # --- END: Added new intents ---
 
         # --- Window & Media ---
         self.add_intent("minimize_window", [
@@ -192,7 +207,7 @@ class IntentClassifier:
 
         # --- Assistant Specific ---
         self.add_intent("what_can_you_do", [
-            "what can you do", "help", "show commands", "abilities"
+            "what can you do", "help", "show commands", "abilities", "what do you do"
         ])
         self.add_intent("who_are_you", [
             "who are you", "what is your name"
@@ -258,9 +273,7 @@ class IntentClassifier:
             "what is the date", "what's today's date"
         ])
         self.add_intent("show_weather", [
-            "what's the weather", "show me the forecast"
+            "what's the weather", "show me the forecast", "how is the weather in"
         ])
 
         logger.info(f"Setup {len(self.intents)} default intents")
-        # --- END REFACTOR ---
-

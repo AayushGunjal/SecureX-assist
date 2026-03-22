@@ -45,16 +45,19 @@ def init_database():
         {
             'username': 'testuser',
             'password': 'test123',
+            'account_type': 'standard_user',
             'email': 'test@example.com'
         },
         {
             'username': 'admin',
             'password': 'admin123',
+            'account_type': 'administrator',
             'email': 'admin@example.com'
         },
         {
             'username': 'demo',
             'password': 'demo123',
+            'account_type': 'power_user',
             'email': 'demo@example.com'
         }
     ]
@@ -65,6 +68,15 @@ def init_database():
         # Check if user already exists
         existing = db.get_user_by_username(user_data['username'])
         if existing:
+            try:
+                cursor = db.conn.cursor()
+                cursor.execute(
+                    "UPDATE users SET account_type = ? WHERE id = ?",
+                    (user_data['account_type'], existing['id'])
+                )
+                db.conn.commit()
+            except Exception:
+                pass
             print(f"⚠️  User '{user_data['username']}' already exists (ID: {existing['id']})")
             continue
         
@@ -75,12 +87,14 @@ def init_database():
         user_id = db.create_user(
             username=user_data['username'],
             password_hash=password_hash,
+            account_type=user_data['account_type'],
             email=user_data['email']
         )
         
         if user_id:
             print(f"✅ Created: {user_data['username']} (ID: {user_id})")
             print(f"   Password: {user_data['password']}")
+            print(f"   Type: {user_data['account_type']}")
             print(f"   Email: {user_data['email']}")
             created_count += 1
         else:

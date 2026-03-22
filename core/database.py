@@ -48,6 +48,7 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT UNIQUE NOT NULL,
                     password_hash TEXT NOT NULL,
+                    account_type TEXT DEFAULT 'standard_user',
                     email TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     last_login TIMESTAMP,
@@ -129,6 +130,18 @@ class Database:
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 )
             """)
+
+            # API Keys table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS api_keys (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    key_hash TEXT UNIQUE NOT NULL,
+                    client_name TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    expires_at TIMESTAMP,
+                    is_active BOOLEAN DEFAULT 1
+                )
+            """)
             
             # Migration: Add embedding_variance column if it doesn't exist
             try:
@@ -137,6 +150,19 @@ class Database:
             except sqlite3.OperationalError:
                 # Column already exists
                 pass
+
+            # Migration: Add account_type to users if it doesn't exist
+            try:
+                cursor.execute("ALTER TABLE users ADD COLUMN account_type TEXT DEFAULT 'standard_user'")
+                logger.info("Added account_type column to users table")
+            except sqlite3.OperationalError:
+                # Column already exists
+                pass
+
+            # Backfill account_type for older rows created before migration
+            cursor.execute(
+                "UPDATE users SET account_type = 'standard_user' WHERE account_type IS NULL OR TRIM(account_type) = ''"
+            )
             
             self.conn.commit()
             logger.info("Database schema initialized successfully")
@@ -157,6 +183,7 @@ class Database:
         self, 
         username: str, 
         password_hash: str, 
+        account_type: str = "standard_user",
         email: Optional[str] = None
     ) -> Optional[int]:
         """
@@ -167,17 +194,22 @@ class Database:
         """
         try:
             cursor = self.conn.cursor()
+
+            allowed_types = {"administrator", "standard_user", "power_user", "guest"}
+            normalized_type = (account_type or "standard_user").strip().lower()
+            if normalized_type not in allowed_types:
+                normalized_type = "standard_user"
             
             cursor.execute(
-                "INSERT INTO users (username, password_hash, email) VALUES (?, ?, ?)",
-                (username, password_hash, email)
+                "INSERT INTO users (username, password_hash, account_type, email) VALUES (?, ?, ?, ?)",
+                (username, password_hash, normalized_type, email)
             )
             
             self.conn.commit()
             user_id = cursor.lastrowid
             
-            logger.info(f"User created: {username} (ID: {user_id})")
-            self.log_audit(user_id, "user_created", f"Username: {username}")
+            logger.info(f"User created: {username} (ID: {user_id}, type: {normalized_type})")
+            self.log_audit(user_id, "user_created", f"Username: {username}, Type: {normalized_type}")
             
             return user_id
             
@@ -739,4 +771,81 @@ class Database:
 
         except Exception as e:
             logger.error(f"Failed to get liveness challenges: {e}")
+            return []
+
+    # ==================== API KEY OPERATIONS ====================
+    
+    def create_api_key(self, key_hash: str, client_name: str, expires_at: Optional[str] = None) -> Optional[int]:
+        """Create a new API key"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "INSERT INTO api_keys (key_hash, client_name, expires_at) VALUES (?, ?, ?)",
+                (key_hash, client_name, expires_at)
+            )
+            self.conn.commit()
+            
+            logger.info(f"API key created for client: {client_name}")
+            return cursor.lastrowid
+            
+        except sqlite3.IntegrityError:
+            logger.warning(f"API key hash already exists")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to create API key: {e}")
+            return None
+            
+    def validate_api_key(self, key_hash: str) -> Optional[Dict]:
+        """Validate API key hash and return details if valid"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "SELECT * FROM api_keys WHERE key_hash = ? AND is_active = 1",
+                (key_hash,)
+            )
+            row = cursor.fetchone()
+            
+            if row:
+                key_dict = dict(row)
+                # Check expiration
+                if key_dict.get('expires_at'):
+                    try:
+                        # SQLite might return different ISO formats, be generous
+                        expires_dt = datetime.fromisoformat(key_dict['expires_at'].replace('Z', '+00:00'))
+                        if datetime.utcnow().timestamp() > expires_dt.timestamp():
+                            self.revoke_api_key(key_dict['id'])
+                            return None
+                    except ValueError as e:
+                        logger.warning(f"Failed to parse expiration date: {e}")
+                return key_dict
+            return None
+            
+        except Exception as e:
+            logger.error(f"Failed to validate API key: {e}")
+            return None
+            
+    def revoke_api_key(self, key_id: int) -> bool:
+        """Revoke an API key"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "UPDATE api_keys SET is_active = 0 WHERE id = ?",
+                (key_id,)
+            )
+            self.conn.commit()
+            logger.info(f"Revoked API key ID: {key_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to revoke API key: {e}")
+            return False
+            
+    def get_all_api_keys(self) -> List[Dict]:
+        """Get all API keys"""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM api_keys ORDER BY created_at DESC")
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Failed to get API keys: {e}")
             return []

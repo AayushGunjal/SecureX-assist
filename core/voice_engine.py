@@ -73,9 +73,12 @@ class VoiceEngine:
             # Try loading primary model (pyannote/embedding)
             logger.info("Loading primary model: pyannote/embedding")
             from pyannote.audio import Model, Inference
+            import os
             
             model_name = self.config.get('models', {}).get('primary_embedding', 'pyannote/embedding')
-            self.primary_model = Model.from_pretrained(model_name, use_auth_token=False)
+            hf_token = os.environ.get("HF_TOKEN")
+            # Pass the token or True so it checks the environment
+            self.primary_model = Model.from_pretrained(model_name, use_auth_token=hf_token if hf_token else True)
             self.inference = Inference(self.primary_model, window="whole")
             self.active_backend = "pyannote"
             
@@ -89,6 +92,22 @@ class VoiceEngine:
             try:
                 logger.info("Loading fallback model: SpeechBrain ECAPA-TDNN")
                 from speechbrain.pretrained import EncoderClassifier
+                
+                # Fix Windows WinError 1314 for SpeechBrain cache symlinking
+                import os
+                if os.name == 'nt' and not hasattr(os, '_original_symlink'):
+                    os._original_symlink = os.symlink
+                    def custom_symlink(src, dst, target_is_directory=False, **kwargs):
+                        import shutil
+                        if os.path.exists(dst): return
+                        try:
+                            if os.path.isdir(src):
+                                shutil.copytree(src, dst, dirs_exist_ok=True)
+                            else:
+                                shutil.copy2(src, dst)
+                        except Exception as patch_e:
+                            logger.debug(f"Fallback copy failed: {patch_e}")
+                    os.symlink = custom_symlink
                 
                 fallback_name = self.config.get('models', {}).get(
                     'fallback_embedding', 
@@ -386,6 +405,12 @@ class VoiceEngine:
             embedding = embedding.cpu().numpy()
         if embedding.ndim > 1:
             embedding = embedding.flatten()
+        
+        # L2 normalize the embedding for consistent cosine similarity calculation
+        embedding_norm = np.linalg.norm(embedding)
+        if embedding_norm > 0:
+            embedding = embedding / embedding_norm
+        
         logger.info(f"Extracted pyannote embedding: shape={embedding.shape}")
         return embedding
     
@@ -428,6 +453,11 @@ class VoiceEngine:
         embedding = self.fallback_model.encode_batch(signal)
         embedding = embedding.squeeze().cpu().numpy()
         
+        # L2 normalize the embedding for consistent cosine similarity calculation
+        embedding_norm = np.linalg.norm(embedding)
+        if embedding_norm > 0:
+            embedding = embedding / embedding_norm
+        
         logger.info(f"Extracted SpeechBrain embedding: shape={embedding.shape}")
         return embedding
     
@@ -456,6 +486,11 @@ class VoiceEngine:
             else:
                 embedding = embedding[:512]
                 print(f"DEBUG: Embedding truncated to: shape={embedding.shape}")
+            
+            # L2 normalize the embedding for consistent cosine similarity calculation
+            embedding_norm = np.linalg.norm(embedding)
+            if embedding_norm > 0:
+                embedding = embedding / embedding_norm
             
             logger.info(f"Extracted basic MFCC embedding: shape={embedding.shape}")
             print(f"DEBUG: Basic embedding extraction successful")

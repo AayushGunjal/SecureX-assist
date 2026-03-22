@@ -27,6 +27,20 @@ class AntiSpoofingEngine:
     def __init__(self, config: Dict):
         self.config = config
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        security_cfg = config.get('security', {}) if isinstance(config, dict) else {}
+        system_cfg = config.get('system', {}) if isinstance(config, dict) else {}
+
+        # Replay score is a "genuine-ness" score (higher is more likely live voice).
+        # Keep these configurable because different microphones/environments shift scores.
+        self.replay_live_min = float(
+            security_cfg.get('replay_live_min', system_cfg.get('replay_live_min', 0.20))
+        )
+        self.liveness_live_min = float(
+            security_cfg.get('liveness_live_min', system_cfg.get('liveness_live_min', 0.50))
+        )
+        self.quality_genuine_min = float(
+            security_cfg.get('quality_genuine_min', system_cfg.get('quality_genuine_min', 0.40))
+        )
         logger.info("Anti-Spoofing Engine initialized")
     
     def analyze_audio_security(self, audio_path: str) -> Dict:
@@ -49,15 +63,21 @@ class AntiSpoofingEngine:
             quality_score = self._assess_speech_quality(audio_data, sample_rate)
             noise_score = self._analyze_background_noise(audio_data, sample_rate)
             
-            # Calculate overall scores - adjusted thresholds for legitimate users
-            # Lower replay threshold since legitimate recordings can score ~0.45
-            is_live = replay_score > 0.4 and liveness_score > 0.5
-            # More permissive - clean recordings should still be genuine if quality is high
-            # Remove noise_score requirement since quality_score already covers speech quality
-            is_genuine = quality_score > 0.4
+            # Calculate overall scores using configurable thresholds.
+            # replay_score is "higher is more genuine/live".
+            is_live = replay_score >= self.replay_live_min and liveness_score >= self.liveness_live_min
+            # Keep genuine gate permissive enough for normal mic/noise variation.
+            is_genuine = quality_score >= self.quality_genuine_min
             
-            logger.info(f"Security decision: is_live={is_live} (replay_score={replay_score:.3f} > 0.4: {replay_score > 0.4}, liveness_score={liveness_score:.3f} > 0.5: {liveness_score > 0.5})")
-            logger.info(f"Security decision: is_genuine={is_genuine} (quality_score={quality_score:.3f} > 0.4: {quality_score > 0.4})")
+            logger.info(
+                f"Security decision: is_live={is_live} "
+                f"(replay_score={replay_score:.3f} >= {self.replay_live_min:.2f}: {replay_score >= self.replay_live_min}, "
+                f"liveness_score={liveness_score:.3f} >= {self.liveness_live_min:.2f}: {liveness_score >= self.liveness_live_min})"
+            )
+            logger.info(
+                f"Security decision: is_genuine={is_genuine} "
+                f"(quality_score={quality_score:.3f} >= {self.quality_genuine_min:.2f}: {quality_score >= self.quality_genuine_min})"
+            )
             
             # Overall confidence (weighted average)
             confidence = (

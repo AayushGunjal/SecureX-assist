@@ -4,8 +4,13 @@ Voice Biometric Authentication System
 """
 
 import sys
+import os
 import logging
 from pathlib import Path
+
+# Disable HuggingFace symlinks to prevent WinError 1314 on Windows without Admin rights
+os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
+os.environ['HF_HUB_DISABLE_SYMLINKS'] = '1'
 
 # Add project root to path
 project_root = Path(__file__).parent

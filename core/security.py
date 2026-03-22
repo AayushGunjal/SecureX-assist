@@ -6,11 +6,15 @@ Multi-factor authentication and session management
 import secrets
 import hashlib
 import time
-from typing import Optional, Tuple, Dict
-from dataclasses import dataclass
+from typing import Optional, Tuple, Dict, Any
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import logging
 import random
+from enum import Enum
+from collections import deque
+import os
+import subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +50,164 @@ class SecurityContext:
         self.last_activity = time.time()
 
 
+class AlertLevel(Enum):
+    """Escalation levels for authentication failures."""
+    NONE = "none"
+    SOFT = "soft"
+    ACTIVE = "active"
+    HARD = "hard"
+
+
+@dataclass
+class AuthAlertDecision:
+    """Decision returned after a failed authentication attempt."""
+    level: AlertLevel
+    message: str
+    recent_failures: int
+    cooldown_seconds: int = 0
+    should_lock_workstation: bool = False
+
+
+@dataclass
+class AuthAlertState:
+    """Per-user failure tracking for staged alerting."""
+    failures: deque = field(default_factory=lambda: deque(maxlen=50))
+    cooldown_until: Optional[float] = None
+
+
+class AuthenticationAlertSystem:
+    """
+    Staged alerting for unauthenticated attempts.
+
+    Levels:
+    - SOFT: Warning + log
+    - ACTIVE: Warning + cooldown
+    - HARD: Extended cooldown + optional workstation lock
+    """
+
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        section = config.get("security_alerts", {})
+        self.window_seconds = section.get("window_seconds", 120)
+        self.soft_threshold = section.get("soft_threshold", 1)
+        self.active_threshold = section.get("active_threshold", 3)
+        self.hard_threshold = section.get("hard_threshold", 5)
+        self.active_cooldown_seconds = section.get("active_cooldown_seconds", 30)
+        self.hard_cooldown_seconds = section.get("hard_cooldown_seconds", 120)
+        self.enable_workstation_lock = section.get("enable_workstation_lock", False)
+        self.states: Dict[str, AuthAlertState] = {}
+
+        logger.info(
+            "AuthenticationAlertSystem initialized: window=%ss soft=%s active=%s hard=%s",
+            self.window_seconds,
+            self.soft_threshold,
+            self.active_threshold,
+            self.hard_threshold,
+        )
+
+    def get_remaining_cooldown(self, username: str) -> int:
+        """Return remaining cooldown in seconds, or 0 if not throttled."""
+        state = self.states.get(username)
+        if not state or not state.cooldown_until:
+            return 0
+        remaining = int(max(0, state.cooldown_until - time.time()))
+        if remaining == 0:
+            state.cooldown_until = None
+        return remaining
+
+    def register_success(self, username: str) -> None:
+        """Reset alert state after successful authentication."""
+        if username in self.states:
+            del self.states[username]
+
+    def register_failure(
+        self,
+        username: str,
+        reason: str = "authentication_failed",
+        spoof_detected: bool = False,
+        sensitive_action: bool = False,
+    ) -> AuthAlertDecision:
+        """Record failure and return escalation decision."""
+        now = time.time()
+        state = self.states.setdefault(username, AuthAlertState())
+        state.failures.append(now)
+
+        # Keep only failures in configured window.
+        cutoff = now - self.window_seconds
+        while state.failures and state.failures[0] < cutoff:
+            state.failures.popleft()
+
+        recent = len(state.failures)
+        level = AlertLevel.SOFT if recent >= self.soft_threshold else AlertLevel.NONE
+        cooldown_seconds = 0
+        should_lock = False
+
+        if recent >= self.hard_threshold or (spoof_detected and recent >= self.active_threshold):
+            level = AlertLevel.HARD
+            cooldown_seconds = self.hard_cooldown_seconds
+            state.cooldown_until = now + cooldown_seconds
+            should_lock = self.enable_workstation_lock
+        elif recent >= self.active_threshold:
+            level = AlertLevel.ACTIVE
+            cooldown_seconds = self.active_cooldown_seconds
+            state.cooldown_until = now + cooldown_seconds
+
+        message = self._build_message(level, recent, reason, cooldown_seconds, spoof_detected)
+        logger.warning(
+            "Auth alert: user=%s level=%s recent=%s reason=%s cooldown=%ss spoof=%s",
+            username,
+            level.value,
+            recent,
+            reason,
+            cooldown_seconds,
+            spoof_detected,
+        )
+
+        if should_lock:
+            self._lock_workstation()
+
+        return AuthAlertDecision(
+            level=level,
+            message=message,
+            recent_failures=recent,
+            cooldown_seconds=cooldown_seconds,
+            should_lock_workstation=should_lock,
+        )
+
+    @staticmethod
+    def _build_message(
+        level: AlertLevel,
+        recent: int,
+        reason: str,
+        cooldown_seconds: int,
+        spoof_detected: bool,
+    ) -> str:
+        if level == AlertLevel.HARD:
+            base = "Hard security alert triggered"
+        elif level == AlertLevel.ACTIVE:
+            base = "Active security alert triggered"
+        else:
+            base = "Failed authentication attempt recorded"
+
+        spoof_text = " (spoof suspected)" if spoof_detected else ""
+        cooldown_text = f" Cooldown: {cooldown_seconds}s." if cooldown_seconds > 0 else ""
+        return f"{base}{spoof_text}. Recent failures: {recent}. Reason: {reason}.{cooldown_text}"
+
+    @staticmethod
+    def _lock_workstation() -> None:
+        """Lock workstation on Windows when hard alert is reached."""
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["rundll32.exe", "user32.dll,LockWorkStation"],
+                    check=False,
+                    capture_output=True,
+                )
+                logger.warning("Workstation lock command executed due to hard security alert")
+        except Exception as e:
+            logger.error(f"Failed to lock workstation: {e}")
+
+
 class SecurityManager:
     """
     Manages multi-factor authentication and security operations
@@ -59,11 +221,13 @@ class SecurityManager:
         self.config = config
         self.sessions: Dict[str, SecurityContext] = {}
         self.failed_attempts: Dict[str, int] = {}
-        
-        # Security settings
-        self.max_attempts = config.get('security', {}).get('max_login_attempts', 3)
-        self.session_timeout = config.get('security', {}).get('session_timeout', 3600)
-        self.require_liveness = config.get('security', {}).get('require_liveness', True)
+
+        # Security settings with backward-compatible fallbacks.
+        security_cfg = config.get('security', {})
+        system_cfg = config.get('system', {})
+        self.max_attempts = security_cfg.get('max_login_attempts', system_cfg.get('max_login_attempts', 3))
+        self.session_timeout = security_cfg.get('session_timeout', system_cfg.get('session_timeout', 3600))
+        self.require_liveness = security_cfg.get('require_liveness', system_cfg.get('require_liveness', True))
         
         logger.info("SecurityManager initialized with 3FA")
     
